@@ -1,0 +1,15 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Local databases (may contain real booking/customer data)
+*.sqlite
+*.db
+*.db-shm
+*.db-wal
+dump.sql

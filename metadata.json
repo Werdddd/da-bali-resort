@@ -1,0 +1,6 @@
+{
+  "name": "Da Bali Resort",
+  "description": "A luxury resort booking application with semi-automated payment gateway and admin dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
