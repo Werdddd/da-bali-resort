@@ -8,10 +8,11 @@ import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import { WebSocketServer, WebSocket } from "ws";
 import { createServer } from "http";
-import { format, addDays, subDays, isSameDay, parseISO } from "date-fns";
+import { format, addDays, subDays, isSameDay, parseISO, differenceInDays } from "date-fns";
 import nodemailer from "nodemailer";
 import cors from "cors";
 import fs from "fs";
+import { generateInvoicePdf } from "./pdf-invoice";
 
 // --- IN-MEMORY LOGGER FOR DEBUGGING ---
 const debugLogs: string[] = [];
@@ -1657,6 +1658,68 @@ async function startServer() {
     }
   });
 
+  app.get("/api/bookings/:id/invoice", async (req, res) => {
+    try {
+      const booking = db.prepare(`
+        SELECT b.*, r.name as room_name,
+               COALESCE(u.first_name, b.first_name) as first_name,
+               COALESCE(u.last_name, b.last_name) as last_name,
+               COALESCE(u.email, b.email) as email
+        FROM bookings b
+        JOIN rooms r ON b.room_id = r.id
+        LEFT JOIN users u ON b.user_id = u.id
+        WHERE b.id = ?
+      `).get(req.params.id) as any;
+
+      if (!booking) return res.status(404).json({ error: "Booking not found" });
+
+      const sessionUserId = (req.session as any)?.userId;
+      const sessionUserRole = (req.session as any)?.userRole;
+      const headerUserId = req.headers['x-user-id'];
+      const headerUserRole = req.headers['x-user-role'];
+      const userId = sessionUserId || headerUserId;
+      const userRole = sessionUserRole || headerUserRole;
+
+      const isOwner = userId && String(userId) === String(booking.user_id);
+      const isStaff = userRole === 'admin' || userRole === 'staff';
+      if (!isOwner && !isStaff) {
+        return res.status(403).json({ error: "Unauthorized" });
+      }
+
+      const amountPaid = (booking.amount_paid || 0) + (booking.balance_amount_paid || 0);
+      const amountDue = Math.max(0, (booking.total_price || 0) - amountPaid);
+      const guestName = [booking.first_name, booking.last_name].filter(Boolean).join(" ") || "Guest";
+
+      const pdfBuffer = await generateInvoicePdf({
+        id: booking.id,
+        createdAt: booking.created_at ? format(new Date(booking.created_at), 'MMM dd, yyyy') : 'N/A',
+        status: (booking.status || '').toUpperCase().replace('_', ' '),
+        paymentMethod: booking.payment_method || 'N/A',
+        reservationCode: booking.qr_code || `DB-${booking.id}`,
+        itemLabel: "Room",
+        itemName: booking.room_name || 'N/A',
+        guestName,
+        guestEmail: booking.email,
+        details: [
+          { label: "Check-in", value: format(new Date(booking.check_in), 'MMM dd, yyyy') },
+          { label: "Check-out", value: format(new Date(booking.check_out), 'MMM dd, yyyy') },
+          { label: "Duration", value: `${differenceInDays(new Date(booking.check_out), new Date(booking.check_in))} Nights` },
+          { label: "Guests", value: `${booking.guests_count || 1} Person(s)` },
+        ],
+        totalPrice: booking.total_price || 0,
+        amountPaid,
+        amountDue,
+      });
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=invoice_${booking.id}.pdf`);
+      res.send(pdfBuffer);
+    } catch (e) {
+      console.error("Invoice generation error:", e);
+      res.status(500).json({ error: "Failed to generate invoice" });
+    }
+  });
+
   app.post("/api/bookings/walk-in", (req, res) => {
     try {
       const { roomId, checkIn, checkOut, totalPrice, guestsCount, extraBed, firstName, lastName, email, contactNo } = req.body;
@@ -1720,6 +1783,67 @@ async function startServer() {
     } catch (e) {
       console.error("Error fetching amenity bookings:", e);
       res.status(500).json({ error: "Failed to fetch amenity bookings" });
+    }
+  });
+
+  app.get("/api/amenity-bookings/:id/invoice", async (req, res) => {
+    try {
+      const booking = db.prepare(`
+        SELECT ab.*, a.name as amenity_name,
+               COALESCE(u.first_name, ab.first_name) as first_name,
+               COALESCE(u.last_name, ab.last_name) as last_name,
+               COALESCE(u.email, ab.email) as email
+        FROM amenity_bookings ab
+        JOIN amenities a ON ab.amenity_id = a.id
+        LEFT JOIN users u ON ab.user_id = u.id
+        WHERE ab.id = ?
+      `).get(req.params.id) as any;
+
+      if (!booking) return res.status(404).json({ error: "Amenity booking not found" });
+
+      const sessionUserId = (req.session as any)?.userId;
+      const sessionUserRole = (req.session as any)?.userRole;
+      const headerUserId = req.headers['x-user-id'];
+      const headerUserRole = req.headers['x-user-role'];
+      const userId = sessionUserId || headerUserId;
+      const userRole = sessionUserRole || headerUserRole;
+
+      const isOwner = userId && String(userId) === String(booking.user_id);
+      const isStaff = userRole === 'admin' || userRole === 'staff';
+      if (!isOwner && !isStaff) {
+        return res.status(403).json({ error: "Unauthorized" });
+      }
+
+      const amountPaid = (booking.amount_paid || 0) + (booking.balance_amount_paid || 0);
+      const amountDue = Math.max(0, (booking.total_price || 0) - amountPaid);
+      const guestName = [booking.first_name, booking.last_name].filter(Boolean).join(" ") || "Guest";
+
+      const pdfBuffer = await generateInvoicePdf({
+        id: booking.id,
+        createdAt: booking.created_at ? format(new Date(booking.created_at), 'MMM dd, yyyy') : 'N/A',
+        status: (booking.status || '').toUpperCase().replace('_', ' '),
+        paymentMethod: booking.payment_method || 'N/A',
+        reservationCode: booking.qr_code || `DB-${booking.id}`,
+        itemLabel: "Amenity",
+        itemName: booking.amenity_name || 'N/A',
+        guestName,
+        guestEmail: booking.email,
+        details: [
+          { label: "Reservation Date", value: format(new Date(booking.reservation_date), 'MMM dd, yyyy') },
+          { label: "Reservation Time", value: booking.reservation_time || 'N/A' },
+          { label: "Pax Count", value: `${booking.pax_count || 1} Person(s)` },
+        ],
+        totalPrice: booking.total_price || 0,
+        amountPaid,
+        amountDue,
+      });
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=invoice_${booking.id}.pdf`);
+      res.send(pdfBuffer);
+    } catch (e) {
+      console.error("Amenity invoice generation error:", e);
+      res.status(500).json({ error: "Failed to generate invoice" });
     }
   });
 

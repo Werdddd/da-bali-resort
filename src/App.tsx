@@ -1875,9 +1875,11 @@ const ReceiptModal = ({
   onArchive,
   onPay,
   onRefresh,
-  setConfirmDialog
-}: { 
-  booking: Booking | AmenityBooking, 
+  setConfirmDialog,
+  currentUserId,
+  currentUserRole
+}: {
+  booking: Booking | AmenityBooking,
   onClose: () => void,
   onVerify?: (status: 'confirmed' | 'rejected', notes?: string) => Promise<void>,
   isAdminView?: boolean,
@@ -1886,7 +1888,9 @@ const ReceiptModal = ({
   onArchive?: (id: number, isAmenity: boolean) => Promise<void>,
   onPay?: () => void,
   onRefresh?: () => Promise<void>,
-  setConfirmDialog?: (dialog: any) => void
+  setConfirmDialog?: (dialog: any) => void,
+  currentUserId?: number,
+  currentUserRole?: string
 }) => {
   const [showRejectReasonInput, setShowRejectReasonInput] = useState(false);
   const [rejectionReasonText, setRejectionReasonText] = useState('');
@@ -1913,6 +1917,36 @@ const ReceiptModal = ({
 
   const isAmenity = 'amenity_name' in booking;
 
+  const [isDownloading, setIsDownloading] = useState(false);
+  const handleDownloadInvoice = async () => {
+    setIsDownloading(true);
+    try {
+      const endpoint = isAmenity ? `/api/amenity-bookings/${booking.id}/invoice` : `/api/bookings/${booking.id}/invoice`;
+      const res = await fetch(endpoint, {
+        headers: {
+          'x-user-id': currentUserId?.toString() || '',
+          'x-user-role': currentUserRole || ''
+        },
+        credentials: 'include'
+      });
+      if (!res.ok) throw new Error("Failed to generate invoice");
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `invoice_${booking.id}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Invoice download error:', error);
+      alert('Failed to download invoice. Please try again.');
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
   const isBalanceProof = ((booking.status as string) === 'confirmed' || (booking.status as string) === 'checked-in' || (booking.status as string) === 'Completed' || (booking.status as string) === 'completed') && booking.balance_proof_of_payment;
   const proofUrl = isBalanceProof ? booking.balance_proof_of_payment : booking.proof_of_payment;
   const transactionRef = isBalanceProof ? booking.balance_transaction_reference : booking.transaction_reference;
@@ -1925,7 +1959,14 @@ const ReceiptModal = ({
         animate={{ opacity: 1, scale: 1 }}
         className="bg-white w-full max-w-md rounded-2xl overflow-hidden shadow-2xl print:shadow-none print:rounded-none max-h-[90vh] flex flex-col my-[5%]"
       >
-        <div className="bg-coffee-900 p-6 text-white text-center print:bg-white print:text-black print:border-b-2 print:border-coffee-900 shrink-0">
+        <div className="relative bg-coffee-900 p-6 text-white text-center print:bg-white print:text-black print:border-b-2 print:border-coffee-900 shrink-0">
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="absolute top-3 right-3 text-coffee-300 hover:text-white hover:bg-white/10 rounded-full p-1.5 transition-colors print:hidden"
+          >
+            <X className="h-5 w-5" />
+          </button>
           <Hotel className="h-10 w-10 mx-auto mb-2 text-coffee-300 print:text-coffee-900" />
           <h2 className="text-2xl font-serif font-bold">Official Receipt</h2>
           <p className="text-coffee-300 text-sm print:text-coffee-600">Da Bali Resort</p>
@@ -2500,18 +2541,19 @@ const ReceiptModal = ({
             </div>
           )}
 
-          <div className="flex gap-6 print:hidden shrink-0 p-4 pt-2">
-            <button 
+          <div className="flex gap-3 print:hidden shrink-0 p-4 pt-2">
+            <button
               onClick={handlePrint}
               className="flex-1 bg-coffee-100 text-coffee-900 py-3 rounded-xl font-bold hover:bg-coffee-200 transition-colors flex items-center justify-center text-sm"
             >
               <Printer className="h-4 w-4 mr-2" /> Print
             </button>
-            <button 
-              onClick={onClose}
-              className="flex-1 bg-coffee-900 text-white py-3 rounded-xl font-bold hover:bg-coffee-800 transition-colors text-sm"
+            <button
+              onClick={handleDownloadInvoice}
+              disabled={isDownloading}
+              className="flex-1 bg-[#A3402A] text-white py-3 rounded-xl font-bold hover:bg-[#8a3522] transition-colors flex items-center justify-center text-sm disabled:opacity-60"
             >
-              Close
+              <Download className="h-4 w-4 mr-2" /> {isDownloading ? 'Preparing...' : 'Download PDF'}
             </button>
           </div>
           <p className="hidden print:block text-center text-[10px] text-coffee-400 mt-8">
@@ -9097,6 +9139,8 @@ export default function App() {
           onRefresh={fetchAdminData}
           setConfirmDialog={setConfirmDialog}
           isAdminView={user?.role === 'admin' || user?.role === 'staff'}
+          currentUserId={user?.id}
+          currentUserRole={user?.role}
           onVerify={async (status, notes) => {
             const isAmenity = 'amenity_name' in showReceipt;
             if (status === 'confirmed') {
