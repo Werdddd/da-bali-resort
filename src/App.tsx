@@ -4110,25 +4110,7 @@ export default function App() {
   };
 
   const exportBookingsToCSV = () => {
-    if (bookings.length === 0) return;
-    
-    const headers = ['ID', 'Guest Name', 'Email', 'Room', 'Check-in', 'Check-out', 'Total Price', 'Status', 'Payment Method'];
-    const csvRows = [
-      headers.join(','),
-      ...bookings.map(b => [
-        b.id,
-        `"${b.first_name} ${b.last_name}"`,
-        b.email,
-        `"${b.room_name}"`,
-        b.check_in,
-        b.check_out,
-        b.total_price,
-        b.status,
-        b.payment_method
-      ].join(','))
-    ];
-    
-    downloadCSV(csvRows.join('\n'), `resort_reservations_${format(new Date(), 'yyyy-MM-dd')}.csv`);
+    downloadServerCsv('/api/bookings/export', `resort_reservations_${format(new Date(), 'yyyy-MM-dd')}.csv`);
   };
 
   const exportMonthlyReportToCSV = () => {
@@ -4181,23 +4163,8 @@ export default function App() {
   };
 
   const exportPaymentsToCSV = () => {
-    if (payments.length === 0) return;
-    
-    const headers = ['ID', 'Reservation ID', 'Guest Name', 'Amount', 'Method', 'Status', 'Date'];
-    const csvRows = [
-      headers.join(','),
-      ...payments.map(p => [
-        p.id,
-        p.reservation_id,
-        `"${p.guest_name}"`,
-        p.amount,
-        p.payment_method,
-        p.status,
-        p.payment_date
-      ].join(','))
-    ];
-    
-    downloadCSV(csvRows.join('\n'), `resort_payments_${format(new Date(), 'yyyy-MM-dd')}.csv`);
+    const query = paymentDateFilter ? `?start_date=${paymentDateFilter}&end_date=${paymentDateFilter}` : '';
+    downloadServerCsv(`/api/payments/export${query}`, `resort_payments_${format(new Date(), 'yyyy-MM-dd')}.csv`);
   };
 
   const exportStaffRecordsToCSV = () => {
@@ -4219,26 +4186,39 @@ export default function App() {
     downloadCSV(csvRows.join('\n'), `resort_staff_${format(new Date(), 'yyyy-MM-dd')}.csv`);
   };
 
-  const handleExportAttendance = async (startDate: string, endDate: string) => {
+  const downloadServerCsv = async (url: string, fallbackFileName: string) => {
     try {
-      const res = await fetch(`/api/staff-dtr/export?start_date=${startDate}&end_date=${endDate}`);
+      const res = await fetch(url, {
+        credentials: 'include',
+        headers: {
+          'x-user-id': user?.id?.toString() || '',
+          'x-user-role': user?.role || ''
+        }
+      });
       if (res.ok) {
         const blob = await res.blob();
-        const url = window.URL.createObjectURL(blob);
+        const disposition = res.headers.get('Content-Disposition');
+        const match = disposition && disposition.match(/filename=([^;]+)/);
+        const fileName = match ? match[1].trim() : fallbackFileName;
+        const downloadUrl = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = url;
-        a.download = `attendance_${startDate}_to_${endDate}.csv`;
+        a.href = downloadUrl;
+        a.download = fileName;
         document.body.appendChild(a);
         a.click();
         a.remove();
-        window.URL.revokeObjectURL(url);
+        window.URL.revokeObjectURL(downloadUrl);
       } else {
-        setToastMessage({ title: 'Error', message: 'Failed to export attendance records.', type: 'error' });
+        setToastMessage({ title: 'Error', message: 'Failed to export data.', type: 'error' });
       }
     } catch (error) {
       console.error('Export error:', error);
       setToastMessage({ title: 'Error', message: 'An error occurred during export.', type: 'error' });
     }
+  };
+
+  const handleExportAttendance = async (startDate: string, endDate: string) => {
+    downloadServerCsv(`/api/staff-dtr/export?start_date=${startDate}&end_date=${endDate}`, `attendance_${startDate}_to_${endDate}.csv`);
   };
 
   const downloadCSV = (csvContent: string, fileName: string) => {

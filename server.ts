@@ -116,6 +116,24 @@ const broadcast = (data: any) => {
   }
 };
 
+// CSV export helpers
+const csvCell = (value: any): string => {
+  if (value === null || value === undefined) return "";
+  const str = String(value);
+  if (/[",\n]/.test(str)) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+};
+
+const toCsv = (headers: string[], rows: any[][]): string => {
+  const lines = [headers.map(csvCell).join(",")];
+  for (const row of rows) {
+    lines.push(row.map(csvCell).join(","));
+  }
+  return lines.join("\n");
+};
+
 // Email Service
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST || 'smtp.ethereal.email',
@@ -2255,19 +2273,93 @@ async function startServer() {
         params.push(start_date.toString(), end_date.toString());
       }
       query += ` ORDER BY d.date DESC`;
-      
+
       const data = db.prepare(query).all(...params) as any[];
-      
-      // Simple CSV generation
+
       const headers = ["Date", "First Name", "Last Name", "Schedule", "Check In", "Check Out", "Status"];
-      const rows = data.map(r => [r.date, r.first_name, r.last_name, r.schedule, r.check_in, r.check_out, r.status].join(","));
-      const csv = [headers.join(","), ...rows].join("\n");
-      
+      const rows = data.map(r => [r.date, r.first_name, r.last_name, r.schedule, r.check_in, r.check_out, r.status]);
+      const csv = toCsv(headers, rows);
+
       res.setHeader('Content-Type', 'text/csv');
       const filename = start_date && end_date ? `staff_attendance_${start_date}_${end_date}.csv` : `staff_attendance_${year_start}_${year_end}.csv`;
       res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
       res.send(csv);
     } catch (e) {
+      res.status(500).json({ error: "Failed to export data" });
+    }
+  });
+
+  app.get("/api/bookings/export", isStaffOrAdmin, (req, res) => {
+    const { start_date, end_date } = req.query;
+    try {
+      let query = `
+        SELECT b.id, b.check_in, b.check_out, b.status, b.payment_method, b.total_price,
+               b.amount_paid, b.guests_count, b.created_at, r.name as room_name,
+               COALESCE(u.first_name, b.first_name) as first_name,
+               COALESCE(u.last_name, b.last_name) as last_name,
+               COALESCE(u.email, b.email) as email
+        FROM bookings b
+        JOIN rooms r ON b.room_id = r.id
+        LEFT JOIN users u ON b.user_id = u.id
+        WHERE b.is_archived = 0
+      `;
+      const params: any[] = [];
+      if (start_date && end_date) {
+        query += ` AND b.check_in BETWEEN ? AND ?`;
+        params.push(start_date.toString(), end_date.toString());
+      }
+      query += ` ORDER BY b.created_at DESC`;
+
+      const data = db.prepare(query).all(...params) as any[];
+
+      const headers = ["Booking ID", "Guest First Name", "Guest Last Name", "Email", "Room", "Check In", "Check Out", "Guests", "Status", "Payment Method", "Total Price", "Amount Paid", "Created At"];
+      const rows = data.map(r => [r.id, r.first_name, r.last_name, r.email, r.room_name, r.check_in, r.check_out, r.guests_count, r.status, r.payment_method, r.total_price, r.amount_paid, r.created_at]);
+      const csv = toCsv(headers, rows);
+
+      res.setHeader('Content-Type', 'text/csv');
+      const filename = start_date && end_date ? `bookings_${start_date}_${end_date}.csv` : `bookings_all.csv`;
+      res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
+      res.send(csv);
+    } catch (e) {
+      console.error("Export bookings error:", e);
+      res.status(500).json({ error: "Failed to export data" });
+    }
+  });
+
+  app.get("/api/payments/export", isStaffOrAdmin, (req, res) => {
+    const { start_date, end_date } = req.query;
+    try {
+      let query = `
+        SELECT p.id, p.booking_id, p.amount, p.method, p.transaction_id, p.status, p.created_at,
+               r.name as room_name,
+               COALESCE(u.first_name, b.first_name) as first_name,
+               COALESCE(u.last_name, b.last_name) as last_name,
+               COALESCE(u.email, b.email) as email
+        FROM payments p
+        JOIN bookings b ON p.booking_id = b.id
+        JOIN rooms r ON b.room_id = r.id
+        LEFT JOIN users u ON b.user_id = u.id
+        WHERE 1=1
+      `;
+      const params: any[] = [];
+      if (start_date && end_date) {
+        query += ` AND date(p.created_at) BETWEEN ? AND ?`;
+        params.push(start_date.toString(), end_date.toString());
+      }
+      query += ` ORDER BY p.created_at DESC`;
+
+      const data = db.prepare(query).all(...params) as any[];
+
+      const headers = ["Payment ID", "Booking ID", "Guest First Name", "Guest Last Name", "Email", "Room", "Amount", "Method", "Transaction ID", "Status", "Date"];
+      const rows = data.map(r => [r.id, r.booking_id, r.first_name, r.last_name, r.email, r.room_name, r.amount, r.method, r.transaction_id, r.status, r.created_at]);
+      const csv = toCsv(headers, rows);
+
+      res.setHeader('Content-Type', 'text/csv');
+      const filename = start_date && end_date ? `payments_${start_date}_${end_date}.csv` : `payments_all.csv`;
+      res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
+      res.send(csv);
+    } catch (e) {
+      console.error("Export payments error:", e);
       res.status(500).json({ error: "Failed to export data" });
     }
   });
