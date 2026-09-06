@@ -813,6 +813,46 @@ async function startServer() {
     }
   };
 
+  // Middleware to check if user is staff or admin
+  const isStaffOrAdmin = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    try {
+      const isApiRequest = req.path.startsWith('/api/') ||
+                           req.originalUrl.startsWith('/api/') ||
+                           req.headers.accept?.includes('application/json') ||
+                           req.headers['content-type']?.includes('application/json');
+
+      // Check session first, then fallback to headers (for iframe preview environments)
+      const sessionUserId = (req.session as any)?.userId;
+      const sessionUserRole = (req.session as any)?.userRole;
+
+      const headerUserId = req.headers['x-user-id'];
+      const headerUserRole = req.headers['x-user-role'];
+
+      const userId = sessionUserId || headerUserId;
+      const userRole = sessionUserRole || headerUserRole;
+
+      if (userId && (userRole === 'admin' || userRole === 'staff')) {
+        (req as any).adminId = userId;
+        next();
+      } else {
+        console.warn(`[isStaffOrAdmin] Unauthorized access attempt to ${req.method} ${req.originalUrl} by user ${userId || 'anonymous'} (Role: ${userRole || 'none'})`);
+
+        if (isApiRequest) {
+          return res.status(403).json({
+            error: "Unauthorized: Staff or admin access required",
+            details: "You do not have the necessary permissions to access this resource. Please ensure you are logged in as staff or admin.",
+            debug: { userId, userRole }
+          });
+        }
+
+        res.status(403).json({ error: "Unauthorized: Staff or admin access required" });
+      }
+    } catch (e) {
+      console.error("isStaffOrAdmin middleware error:", e);
+      res.status(500).json({ error: "Internal server error in authorization check" });
+    }
+  };
+
   // Auth Routes
   app.get("/api/auth/me", (req, res) => {
     try {
@@ -997,7 +1037,7 @@ async function startServer() {
   });
 
   // Room Routes
-  app.get("/api/staff", isAdmin, (req, res) => {
+  app.get("/api/staff", isStaffOrAdmin, (req, res) => {
     try {
       const staff = db.prepare("SELECT id, first_name, last_name, username, role, schedule, position FROM users WHERE role IN ('admin', 'staff')").all();
       res.json(staff);
@@ -1511,7 +1551,7 @@ async function startServer() {
     }
   });
 
-  app.put("/api/bookings/:id/confirm", isAdmin, (req, res) => {
+  app.put("/api/bookings/:id/confirm", isStaffOrAdmin, (req, res) => {
     const { id } = req.params;
     try {
       const qrCode = 'DBR-' + crypto.randomBytes(3).toString('hex').toUpperCase();
@@ -1539,7 +1579,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/bookings/:id/archive", isAdmin, (req, res) => {
+  app.post("/api/bookings/:id/archive", isStaffOrAdmin, (req, res) => {
     const { id } = req.params;
     try {
       db.prepare("UPDATE bookings SET is_archived = 1 WHERE id = ?").run(id);
@@ -1550,7 +1590,7 @@ async function startServer() {
     }
   });
 
-  app.delete("/api/bookings/:id", isAdmin, (req, res) => {
+  app.delete("/api/bookings/:id", isStaffOrAdmin, (req, res) => {
     const { id } = req.params;
     try {
       db.prepare("UPDATE bookings SET status = 'cancelled' WHERE id = ?").run(id);
@@ -1576,7 +1616,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/payments", isAdmin, (req, res) => {
+  app.get("/api/payments", isStaffOrAdmin, (req, res) => {
     try {
       const payments = db.prepare(`
         SELECT p.*, 
@@ -1597,7 +1637,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/bookings/all", isAdmin, (req, res) => {
+  app.get("/api/bookings/all", isStaffOrAdmin, (req, res) => {
     try {
       const bookings = db.prepare(`
         SELECT b.*, r.name as room_name, 
@@ -1667,7 +1707,7 @@ async function startServer() {
   });
 
   // Amenity Booking Routes
-  app.get("/api/amenity-bookings", isAdmin, (req, res) => {
+  app.get("/api/amenity-bookings", isStaffOrAdmin, (req, res) => {
     try {
       const bookings = db.prepare(`
         SELECT ab.*, a.name as amenity_name, u.first_name, u.last_name, u.email
@@ -1825,7 +1865,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/amenity-bookings/:id/archive", isAdmin, (req, res) => {
+  app.post("/api/amenity-bookings/:id/archive", isStaffOrAdmin, (req, res) => {
     const { id } = req.params;
     try {
       db.prepare("UPDATE amenity_bookings SET is_archived = 1 WHERE id = ?").run(id);
@@ -1836,7 +1876,7 @@ async function startServer() {
     }
   });
 
-  app.delete("/api/amenity-bookings/:id", isAdmin, (req, res) => {
+  app.delete("/api/amenity-bookings/:id", isStaffOrAdmin, (req, res) => {
     const { id } = req.params;
     try {
       db.prepare("UPDATE amenity_bookings SET status = 'cancelled' WHERE id = ?").run(id);
@@ -1994,7 +2034,7 @@ async function startServer() {
   });
 
   // Staff DTR Routes
-  app.get("/api/staff-dtr", isAdmin, (req, res) => {
+  app.get("/api/staff-dtr", isStaffOrAdmin, (req, res) => {
     try {
       const { page = 1, limit = 10, month, year, search, userId, date, status } = req.query;
       const offset = (Number(page) - 1) * Number(limit);
@@ -2064,7 +2104,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/staff/all", isAdmin, (req, res) => {
+  app.get("/api/staff/all", isStaffOrAdmin, (req, res) => {
     try {
       const staff = db.prepare("SELECT id, first_name, last_name, email, role FROM users WHERE role IN ('admin', 'staff')").all();
       res.json(staff);
@@ -2073,7 +2113,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/staff-dtr/export", isAdmin, (req, res) => {
+  app.get("/api/staff-dtr/export", isStaffOrAdmin, (req, res) => {
     const { year_start, year_end, start_date, end_date } = req.query;
     try {
       let query = `

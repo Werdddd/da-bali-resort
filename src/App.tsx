@@ -8623,8 +8623,8 @@ export default function App() {
   }, [user, page]);
 
   useEffect(() => {
-    if (user?.role === 'staff' && adminActiveTab !== 'dtr') {
-      setAdminActiveTab('dtr');
+    if (user?.role === 'staff' && adminActiveTab !== 'staff-records') {
+      setAdminActiveTab('staff-records');
     }
   }, [user, adminActiveTab]);
 
