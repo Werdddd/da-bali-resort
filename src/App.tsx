@@ -63,6 +63,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { format, addDays, differenceInDays, isBefore, startOfToday, getDaysInMonth, startOfMonth } from 'date-fns';
 import { QRCodeSVG } from 'qrcode.react';
 import { User, Room, Booking, Analytics, Amenity, Feedback, StaffRecord, AmenityBooking, HeroBanner } from './types';
+import { AMENITY_OPTIONS } from './amenityOptions';
 import { DTRDashboard } from './components/DTRDashboard';
 import { TimePickerModal } from './components/TimePickerModal';
 import bgImage from './476799607_640944451796572_5504544646714415496_n.jpg';
@@ -1610,17 +1611,61 @@ const AmenityProofUploadModal = ({ booking, onClose, onUpload, isUploading, isBa
   );
 };
 
-const AmenityProofViewerModal = ({ booking, onClose, onVerify }: { 
-  booking: AmenityBooking, 
+const AmenityProofViewerModal = ({ booking, onClose, onVerify }: {
+  booking: AmenityBooking,
   onClose: () => void,
   onVerify: (status: 'confirmed' | 'rejected', notes?: string) => void
 }) => {
   const [rejectionNotes, setRejectionNotes] = useState('');
   const [showRejectField, setShowRejectField] = useState(false);
 
+  const hasBalanceProof = !!booking.balance_proof_of_payment;
+  const isPendingVerification = (booking.status as string) === 'pending_verification';
+  // A balance payment is only ever submitted after the deposit has already been
+  // confirmed once, so if a balance proof exists, any pending verification must be
+  // for the balance — never the (already-approved) deposit.
+  const pendingLeg: 'deposit' | 'balance' | null = isPendingVerification ? (hasBalanceProof ? 'balance' : 'deposit') : null;
+
+  const totalPrice = booking.total_price || 0;
+  const totalPaid = (booking.amount_paid || 0) + (booking.balance_amount_paid || 0);
+
+  const PaymentCard = ({ label, isPending, transactionRef, amount, proofUrl }: {
+    label: string, isPending: boolean, transactionRef?: string, amount?: number, proofUrl?: string
+  }) => (
+    <div className={`w-full max-w-md bg-white rounded-2xl shadow-sm border overflow-hidden shrink-0 ${isPending ? 'border-amber-300 ring-2 ring-amber-100' : 'border-coffee-100'}`}>
+      <div className={`px-4 py-2.5 flex justify-between items-center ${isPending ? 'bg-amber-50' : 'bg-coffee-50'}`}>
+        <span className="text-xs font-bold text-coffee-900 uppercase tracking-wider">{label}</span>
+        {isPending && <span className="px-2 py-0.5 bg-amber-500 text-white text-[9px] font-bold rounded uppercase tracking-wider">Pending Verification</span>}
+      </div>
+      <div className="p-4 flex justify-between items-center gap-2">
+        <div>
+          <p className="text-[10px] text-coffee-400 uppercase tracking-widest">Transaction Ref</p>
+          <p className="font-mono font-bold text-coffee-900 text-sm">{transactionRef || 'N/A'}</p>
+        </div>
+        <div className="text-right">
+          <p className="text-[10px] text-coffee-400 uppercase tracking-widest">Amount</p>
+          <p className="font-bold text-emerald-600">₱{amount?.toLocaleString() || '0'}</p>
+        </div>
+      </div>
+      {proofUrl ? (
+        <img
+          src={proofUrl}
+          alt={`${label} Proof`}
+          className="w-full h-auto border-t border-coffee-100"
+          referrerPolicy="no-referrer"
+        />
+      ) : (
+        <div className="text-center text-coffee-400 py-8 border-t border-coffee-100">
+          <AlertTriangle size={32} className="mx-auto mb-2 opacity-20" />
+          <p className="text-xs">No proof of payment uploaded.</p>
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[500] flex items-center justify-center p-4 py-12">
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0, scale: 0.9 }}
         animate={{ opacity: 1, scale: 1 }}
         className="bg-white w-full max-w-xl rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-full"
@@ -1629,42 +1674,35 @@ const AmenityProofViewerModal = ({ booking, onClose, onVerify }: {
           <div>
             <h3 className="text-xl font-serif font-bold text-coffee-900">Verify Amenity Payment</h3>
             <p className="text-xs text-coffee-500">Guest: {booking.first_name} {booking.last_name} | Amenity: {booking.amenity_name}</p>
+            <p className="text-xs text-coffee-500 mt-0.5">Total Paid: <span className="font-bold text-coffee-800">₱{totalPaid.toLocaleString()}</span> of ₱{totalPrice.toLocaleString()} <span className="font-bold uppercase text-[10px] tracking-wider ml-1">({booking.payment_status || 'Pending'})</span></p>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-coffee-100 rounded-full transition-colors">
             <X size={20} className="text-coffee-400" />
           </button>
         </div>
         <div className="p-4 bg-coffee-100/50 flex flex-col items-center justify-start overflow-auto gap-4 flex-1">
-          <div className="w-full max-w-md bg-white p-4 rounded-2xl shadow-sm border border-coffee-100 flex justify-between items-center shrink-0">
-            <div>
-              <p className="text-[10px] text-coffee-400 uppercase tracking-widest">Transaction Ref</p>
-              <p className="font-mono font-bold text-coffee-900">{booking.transaction_reference || 'N/A'}</p>
-            </div>
-            <div className="text-center">
-              <p className="text-[10px] text-coffee-400 uppercase tracking-widest">Submitted On</p>
-              <p className="font-bold text-coffee-900 text-[10px]">{booking.created_at ? format(new Date(booking.created_at), 'MMM dd, HH:mm') : 'N/A'}</p>
-            </div>
-            <div className="text-right">
-              <p className="text-[10px] text-coffee-400 uppercase tracking-widest">Amount Paid</p>
-              <p className="font-bold text-emerald-600">₱{booking.amount_paid?.toLocaleString() || '0'}</p>
-            </div>
-          </div>
-          {booking.proof_of_payment ? (
-            <img 
-              src={booking.proof_of_payment} 
-              alt="Payment Proof" 
-              className="max-w-full h-auto rounded-xl shadow-lg"
-              referrerPolicy="no-referrer"
+          <PaymentCard
+            label="Deposit / Initial Payment"
+            isPending={pendingLeg === 'deposit'}
+            transactionRef={booking.transaction_reference}
+            amount={booking.amount_paid}
+            proofUrl={booking.proof_of_payment}
+          />
+          {hasBalanceProof && (
+            <PaymentCard
+              label="Balance Payment"
+              isPending={pendingLeg === 'balance'}
+              transactionRef={booking.balance_transaction_reference}
+              amount={booking.balance_amount_paid}
+              proofUrl={booking.balance_proof_of_payment}
             />
-          ) : (
-            <div className="text-center text-coffee-400 py-10">
-              <AlertTriangle size={48} className="mx-auto mb-2 opacity-20" />
-              <p>No proof of payment uploaded.</p>
-            </div>
           )}
         </div>
-        {(booking.status as string) === 'pending_verification' && (
+        {isPendingVerification && (
           <div className="p-6 bg-white border-t border-coffee-100 shrink-0 space-y-4">
+            <p className="text-[10px] text-coffee-400 uppercase tracking-widest text-center -mt-1">
+              Reviewing the {pendingLeg === 'balance' ? 'balance' : 'deposit'} payment above
+            </p>
             {showRejectField && (
               <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
                 <label className="text-xs font-bold text-coffee-400 uppercase tracking-widest mb-1.5 block">Rejection Reason</label>
@@ -1678,15 +1716,15 @@ const AmenityProofViewerModal = ({ booking, onClose, onVerify }: {
             )}
             <div className="flex gap-4">
               {!showRejectField ? (
-                <button 
+                <button
                   onClick={() => setShowRejectField(true)}
                   className="flex-1 py-3 px-6 rounded-xl font-bold text-red-600 border-2 border-red-100 hover:bg-red-50 transition-all flex items-center justify-center gap-2"
                 >
                   <X size={20} />
-                  Reject Payment
+                  Reject {pendingLeg === 'balance' ? 'Balance' : 'Deposit'}
                 </button>
               ) : (
-                <button 
+                <button
                   onClick={() => onVerify('rejected', rejectionNotes)}
                   className="flex-1 py-3 px-6 rounded-xl font-bold text-white bg-red-600 hover:bg-red-700 shadow-lg shadow-red-200 transition-all flex items-center justify-center gap-2"
                 >
@@ -1694,16 +1732,16 @@ const AmenityProofViewerModal = ({ booking, onClose, onVerify }: {
                 </button>
               )}
               {!showRejectField && (
-                <button 
+                <button
                   onClick={() => onVerify('confirmed')}
                   className="flex-1 py-3 px-6 rounded-xl font-bold text-white bg-green-600 hover:bg-green-700 shadow-lg shadow-green-200 transition-all flex items-center justify-center gap-2"
                 >
                   <Check size={20} />
-                  Confirm Proof
+                  Confirm {pendingLeg === 'balance' ? 'Balance' : 'Deposit'}
                 </button>
               )}
               {showRejectField && (
-                <button 
+                <button
                   onClick={() => setShowRejectField(false)}
                   className="py-3 px-6 rounded-xl font-bold text-coffee-400 border border-coffee-100 hover:bg-coffee-50 transition-all"
                 >
@@ -2982,88 +3020,6 @@ const WalkInModal = ({ rooms, bookings, onClose, onSubmit, setToastMessage }: { 
 
 // --- Main App Component ---
 
-const AMENITY_OPTIONS: Record<string, { category: string, items: { name: string, price: number }[] }[]> = {
-  "Infinity Pool": [
-    {
-      category: "Entrance Fee",
-      items: [
-        { name: "Adult", price: 90 },
-        { name: "Child (5yrs old & below)", price: 60 }
-      ]
-    },
-    {
-      category: "Cottages",
-      items: [
-        { name: "Large Tent (Max 20 pax)", price: 2500 },
-        { name: "Gray Tent (Max 15 pax)", price: 2000 },
-        { name: "Umbrella (Max 8 pax)", price: 500 },
-        { name: "Umbrella (Near the pool)", price: 600 }
-      ]
-    }
-  ],
-  "Fine Dining": [
-    {
-      category: "Corkages",
-      items: [
-        { name: "Letchon", price: 400 },
-        { name: "Letchon Belly", price: 300 }
-      ]
-    },
-    {
-      category: "Kape Rosario",
-      items: [
-        { name: "Espresso", price: 80 },
-        { name: "Americano", price: 95 },
-        { name: "Latte", price: 75 },
-        { name: "Vietnamese Coffee", price: 125 },
-        { name: "Spanish Latte", price: 135 },
-        { name: "Caramel", price: 140 },
-        { name: "Matcha", price: 140 },
-        { name: "Hazelnut Latte", price: 140 },
-        { name: "Vanilla", price: 140 }
-      ]
-    },
-    {
-      category: "Non-Coffee",
-      items: [
-        { name: "Chocolate", price: 145 },
-        { name: "Matcha Latte", price: 150 },
-        { name: "Blueberry Fizz", price: 125 },
-        { name: "Strawberry Fizz", price: 125 },
-        { name: "Green Apple", price: 125 }
-      ]
-    },
-    {
-      category: "Pizza Menu",
-      items: [
-        { name: "Hawaiian Pizza", price: 599 },
-        { name: "Veggie Pesto Pizza", price: 599 },
-        { name: "BBQ Chicken Pizza", price: 599 },
-        { name: "Cheese and Bacon Pizza", price: 599 },
-        { name: "Garlic Shrimp Pizza", price: 599 }
-      ]
-    }
-  ],
-  "Pavilion": [
-    {
-      category: "Packages",
-      items: [
-        { name: "Venue Rental Only", price: 11000 },
-        { name: "Venue + Catering", price: 11000 }
-      ]
-    }
-  ],
-  "Colored Tent/Team Building": [
-    {
-      category: "Packages",
-      items: [
-        { name: "Venue Rental Only", price: 6000 },
-        { name: "Venue + Catering", price: 11000 }
-      ]
-    }
-  ]
-};
-
 export default function App() {
   const [toastMessage, setToastMessage] = useState<{title: string, message: string, type: 'success' | 'error' | 'info'} | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<{title: string, message: string, onConfirm: () => void, onCancel: () => void} | null>(null);
@@ -3840,10 +3796,14 @@ export default function App() {
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        if (data.type === 'BOOKING_CREATED' || data.type === 'BOOKING_UPDATED' || data.type === 'FEEDBACK_ADDED' || data.type === 'DTR_UPDATED' || data.type === 'HERO_BANNERS_UPDATED' || data.type === 'AMENITY_BOOKING_UPDATED') {
+        if (data.type === 'BOOKING_CREATED' || data.type === 'BOOKING_UPDATED' || data.type === 'FEEDBACK_ADDED' || data.type === 'DTR_UPDATED' || data.type === 'HERO_BANNERS_UPDATED' || data.type === 'AMENITY_BOOKING_UPDATED' || data.type === 'AMENITY_BOOKING_CREATED' || data.type === 'AMENITIES_UPDATED') {
           fetchRooms().catch(console.error);
           fetchFeedbacks().catch(console.error);
           fetchHeroBanners().catch(console.error);
+          if (data.type === 'AMENITY_BOOKING_UPDATED' || data.type === 'AMENITY_BOOKING_CREATED' || data.type === 'AMENITIES_UPDATED') {
+            // Stock/price live on the amenities list, which only these events can change.
+            fetchAmenities().catch(console.error);
+          }
           if (user?.role === 'admin') {
             fetchAdminData().catch(console.error);
           } else if (user) {
@@ -4298,7 +4258,11 @@ export default function App() {
 
       const res = await fetch(endpoint, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': user?.id?.toString() || '',
+          'x-user-role': user?.role || ''
+        },
         body: JSON.stringify({ admin_notes: notesToSave || null })
       });
       if (res.ok) {
@@ -4572,7 +4536,11 @@ export default function App() {
       const method = 'PUT';
       const res = await fetch(endpoint, {
         method,
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': user?.id?.toString() || '',
+          'x-user-role': user?.role || ''
+        },
         body: JSON.stringify({ proofOfPayment: file, transactionReference: reference, amountPaid: amount })
       });
       if (res.ok) {
@@ -4607,11 +4575,15 @@ export default function App() {
       const endpoint = isAmenity ? `/api/amenity-bookings/${bookingId}/balance-payment` : `/api/bookings/${bookingId}/balance-payment`;
       const res = await fetch(endpoint, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': user?.id?.toString() || '',
+          'x-user-role': user?.role || ''
+        },
+        body: JSON.stringify({
           amountPaid: amountToSettle,
           proofOfPayment: '',
-          transactionReference: 'MANUAL_SETTLEMENT' 
+          transactionReference: 'MANUAL_SETTLEMENT'
         })
       });
 
@@ -4691,14 +4663,19 @@ export default function App() {
     try {
       const res = await fetch(`/api/amenity-bookings/${bookingId}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': user?.id?.toString() || '',
+          'x-user-role': user?.role || ''
+        },
         body: JSON.stringify({ status })
       });
       if (res.ok) {
         if (user?.role === 'admin') await fetchAdminData();
         else await fetchUserBookings(user!.id);
       } else {
-        console.error('Failed to update amenity status');
+        const data = await res.json().catch(() => ({}));
+        setToastMessage({ title: 'Error', message: data.error || 'Failed to update amenity status', type: 'error' });
       }
     } catch (error) {
       console.error('Failed to update amenity status:', error);
@@ -4712,12 +4689,19 @@ export default function App() {
     try {
       const res = await fetch(`/api/amenity-bookings/${bookingId}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': user?.id?.toString() || '',
+          'x-user-role': user?.role || ''
+        },
         body: JSON.stringify({ status, admin_notes })
       });
       if (res.ok) {
         setShowAmenityProofViewer(null);
         await fetchAdminData();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setToastMessage({ title: 'Error', message: data.error || 'Failed to update amenity status', type: 'error' });
       }
     } catch (error) {
       console.error('Failed to verify amenity payment:', error);
@@ -5291,10 +5275,15 @@ export default function App() {
             {amenities.map((amenity) => (
               <div key={amenity.id} className="bg-white rounded-3xl shadow-sm hover:shadow-xl transition-all overflow-hidden flex flex-col tablet:flex-row h-full border border-coffee-50">
                 <div className="tablet:w-1/2 h-64 tablet:h-auto relative overflow-hidden">
-                  <ImageSlider 
-                    images={amenity.images && amenity.images.length > 0 ? amenity.images : [amenity.image_url || "https://picsum.photos/seed/resort/800/600"]} 
+                  <ImageSlider
+                    images={amenity.images && amenity.images.length > 0 ? amenity.images : [amenity.image_url || "https://picsum.photos/seed/resort/800/600"]}
                     className="w-full h-full"
                   />
+                  {amenity.stock !== null && amenity.stock !== undefined && amenity.stock <= 0 && (
+                    <div className="absolute top-4 left-4 px-3 py-1 bg-coffee-900/90 text-white text-[10px] font-bold uppercase tracking-wider rounded-full shadow-lg">
+                      Fully Booked
+                    </div>
+                  )}
                 </div>
                 <div className="tablet:w-1/2 p-8 flex flex-col justify-center">
                   <h3 className="text-2xl font-serif font-bold mb-3 text-coffee-900">{amenity.name}</h3>
@@ -5732,13 +5721,18 @@ export default function App() {
                 <span className="font-bold text-coffee-900">₱{(lastAmenityBooking.total_price || 0).toLocaleString()}</span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-coffee-500">Deposit Paid (50%):</span>
-                <span className="font-bold text-emerald-600">₱{lastAmenityBooking.deposit_amount?.toLocaleString()}</span>
+                <span className="text-coffee-500">Amount Paid:</span>
+                <span className="font-bold text-emerald-600">₱{(lastAmenityBooking.amount_paid || 0).toLocaleString()}</span>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-coffee-500">Remaining Balance:</span>
-                <span className="font-bold text-[#A3402A]">₱{lastAmenityBooking.balance_amount?.toLocaleString()}</span>
+                <span className="font-bold text-[#A3402A]">₱{Math.max(0, (lastAmenityBooking.total_price || 0) - (lastAmenityBooking.amount_paid || 0)).toLocaleString()}</span>
               </div>
+              {(lastAmenityBooking.amount_paid || 0) < (lastAmenityBooking.deposit_amount || 0) && (
+                <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">
+                  <span className="font-bold">Note:</span> The required deposit is ₱{(lastAmenityBooking.deposit_amount || 0).toLocaleString()}. Your submitted payment is below this amount, so please settle the difference as soon as possible — your reservation cannot be confirmed until the deposit is met.
+                </div>
+              )}
             </div>
             <ul className="space-y-3 text-sm text-coffee-700">
               <li className="flex items-start">
@@ -6443,7 +6437,11 @@ export default function App() {
                                                     try {
                                                       const response = await fetch(`/api/amenity-bookings/${res.id}`, {
                                                         method: 'PATCH',
-                                                        headers: { 'Content-Type': 'application/json' },
+                                                        headers: {
+                                                          'Content-Type': 'application/json',
+                                                          'x-user-id': user?.id?.toString() || '',
+                                                          'x-user-role': user?.role || ''
+                                                        },
                                                         body: JSON.stringify({ status: 'cancelled' })
                                                       });
                                                       if (response.ok) {
@@ -7899,7 +7897,7 @@ export default function App() {
                           <Search className="h-5 w-5 absolute left-3 top-1/2 -translate-y-1/2 text-coffee-400" />
                         </div>
                         <button 
-                          onClick={() => setEditingAmenity({ name: '', description: '', icon: 'Star', status: 'active', images: [] })}
+                          onClick={() => setEditingAmenity({ name: '', description: '', icon: 'Star', status: 'active', images: [], price: undefined })}
                           className="bg-coffee-900 text-white px-6 py-3 rounded-2xl text-sm font-bold flex items-center shadow-lg hover:bg-coffee-800 transition-all whitespace-nowrap"
                         >
                           <Plus className="h-4 w-4 mr-2" /> Add New Amenity
@@ -7965,13 +7963,22 @@ export default function App() {
                               </div>
                             </div>
                             <p className="text-xs text-coffee-500 line-clamp-2">{amenity.description}</p>
-                            {amenity.images && amenity.images.length > 0 && (
-                              <div className="mt-2 flex gap-1">
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              <span className="text-[10px] bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full font-bold">
+                                ₱{(amenity.price || 0).toLocaleString()}
+                              </span>
+                              <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                                amenity.stock === null || amenity.stock === undefined ? 'bg-coffee-100 text-coffee-600' :
+                                amenity.stock <= 0 ? 'bg-red-100 text-red-700' : 'bg-blue-50 text-blue-700'
+                              }`}>
+                                {amenity.stock === null || amenity.stock === undefined ? 'Unlimited Stock' : `${amenity.stock} in stock`}
+                              </span>
+                              {amenity.images && amenity.images.length > 0 && (
                                 <span className="text-[10px] bg-coffee-100 text-coffee-600 px-2 py-0.5 rounded-full font-bold">
                                   {amenity.images.length} Images
                                 </span>
-                              </div>
-                            )}
+                              )}
+                            </div>
                           </div>
                         </div>
                       ));
@@ -8512,6 +8519,19 @@ export default function App() {
       const totalPrice = calculateAmenityTotalPrice();
       const depositAmount = selectedAmenity?.name === 'Infinity Pool' ? totalPrice : totalPrice * 0.5;
       const balanceAmount = totalPrice - depositAmount;
+      const amountPaidValue = parseFloat(amenityAmountPaid) || 0;
+
+      // Block the reservation entirely if the reported payment doesn't meet the
+      // required deposit — guests must fully settle the deposit before a booking
+      // can even be created, so every pending request starts from a clean, valid state.
+      if (amountPaidValue < depositAmount - 0.1) {
+        setToastMessage({
+          title: 'Deposit Not Met',
+          message: `The required deposit for this reservation is ₱${depositAmount.toLocaleString()}. Please pay at least this amount and enter the correct amount paid before submitting.`,
+          type: 'error'
+        });
+        return;
+      }
 
       const reservationData = {
         user_id: user.id,
@@ -8520,12 +8540,16 @@ export default function App() {
         reservation_time: amenityFormData.time,
         pax_count: paxCount,
         details: amenityFormData.details,
+        // Sent for display/reference only — the server independently recomputes
+        // total_price/deposit_amount/balance_amount from selections + amenity price
+        // so a tampered request can never change what the guest is charged.
         total_price: totalPrice,
         deposit_amount: depositAmount,
         balance_amount: balanceAmount,
+        selections: amenitySelections,
         proofOfPayment: amenityBookingProof,
         paymentMethod: amenityPaymentMethod,
-        amountPaid: parseFloat(amenityAmountPaid) || 0,
+        amountPaid: amountPaidValue,
         transactionReference: amenityTransactionReference
       };
 
@@ -8990,15 +9014,19 @@ export default function App() {
                                 <label className="block text-xs font-bold text-coffee-500 uppercase mb-2">Amount Paid</label>
                                 <div className="relative">
                                   <span className="absolute left-4 top-1/2 -translate-y-1/2 text-coffee-500 font-bold">₱</span>
-                                  <input 
-                                    type="number" 
+                                  <input
+                                    type="number"
                                     required
+                                    min={(selectedAmenity?.name === 'Infinity Pool' ? calculateAmenityTotalPrice() : calculateAmenityTotalPrice() * 0.5) || 0}
                                     value={amenityAmountPaid}
                                     onChange={(e) => setAmenityAmountPaid(e.target.value)}
                                     placeholder={((selectedAmenity?.name === 'Infinity Pool' ? calculateAmenityTotalPrice() : calculateAmenityTotalPrice() * 0.5) || 0).toString()}
                                     className="w-full pl-8 p-3 rounded-xl border border-coffee-200 outline-none focus:ring-2 focus:ring-coffee-500"
                                   />
                                 </div>
+                                <p className="text-[10px] text-coffee-400 mt-1">
+                                  Minimum required deposit: ₱{((selectedAmenity?.name === 'Infinity Pool' ? calculateAmenityTotalPrice() : calculateAmenityTotalPrice() * 0.5) || 0).toLocaleString()}
+                                </p>
                               </div>
                               <div>
                                 <label className="block text-xs font-bold text-coffee-500 uppercase mb-2">Transaction Reference No.</label>
@@ -9062,11 +9090,16 @@ export default function App() {
                     <div className="pt-10 border-t border-coffee-100 flex flex-col sm:flex-row items-center gap-6">
                       <div className="flex-1">
                         <h4 className="text-lg font-bold text-coffee-900 mb-2">Ready to experience this?</h4>
-                        <p className="text-coffee-500 text-sm">Reserve your spot now or book a room to enjoy full access.</p>
+                        <p className="text-coffee-500 text-sm">
+                          {selectedAmenity.stock !== null && selectedAmenity.stock !== undefined && selectedAmenity.stock <= 0
+                            ? 'This amenity is fully booked right now — please check back later.'
+                            : 'Book your spot now.'}
+                        </p>
                       </div>
                       <div className="flex gap-4 w-full sm:w-auto">
-                        <button 
-                          onClick={() => { 
+                        <button
+                          disabled={selectedAmenity.stock !== null && selectedAmenity.stock !== undefined && selectedAmenity.stock <= 0}
+                          onClick={() => {
                             setIsReservingAmenity(true);
                             setAmenityStep('details');
                             setAmenityFormData(null);
@@ -9074,15 +9107,9 @@ export default function App() {
                             setAmenityAmountPaid('');
                             setAmenityTransactionReference('');
                           }}
-                          className="flex-1 sm:flex-none px-8 py-4 bg-white border-2 border-coffee-900 text-coffee-900 rounded-2xl font-bold hover:bg-coffee-50 transition-all active:scale-95 whitespace-nowrap"
+                          className="flex-1 sm:flex-none px-8 py-4 bg-coffee-900 text-white rounded-2xl font-bold hover:bg-coffee-800 transition-all shadow-xl active:scale-95 whitespace-nowrap disabled:bg-coffee-200 disabled:text-coffee-400 disabled:cursor-not-allowed disabled:shadow-none disabled:active:scale-100"
                         >
-                          Reserve Now
-                        </button>
-                        <button 
-                          onClick={() => { setSelectedAmenity(null); setPage('rooms'); }}
-                          className="flex-1 sm:flex-none px-8 py-4 bg-coffee-900 text-white rounded-2xl font-bold hover:bg-coffee-800 transition-all shadow-xl active:scale-95 whitespace-nowrap"
-                        >
-                          Book a Room
+                          {selectedAmenity.stock !== null && selectedAmenity.stock !== undefined && selectedAmenity.stock <= 0 ? 'Fully Booked' : 'Book Now'}
                         </button>
                       </div>
                     </div>
@@ -9591,9 +9618,26 @@ export default function App() {
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-coffee-500 uppercase mb-1">Main Image URL</label>
-                  <input 
+                  <input
                     required value={editingAmenity.image_url || ''}
                     onChange={e => setEditingAmenity({...editingAmenity, image_url: e.target.value})}
+                    className="w-full p-3 rounded-xl border border-coffee-200 outline-none focus:ring-2 focus:ring-coffee-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-coffee-500 uppercase mb-1">Price (₱)</label>
+                  <input
+                    type="number" min="0" step="0.01" required value={editingAmenity.price ?? ''}
+                    onChange={e => setEditingAmenity({...editingAmenity, price: e.target.value === '' ? undefined : Number(e.target.value)})}
+                    className="w-full p-3 rounded-xl border border-coffee-200 outline-none focus:ring-2 focus:ring-coffee-500"
+                  />
+                  <p className="text-[10px] text-coffee-400 mt-1">This is the amount guests are charged when reserving this amenity.</p>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-coffee-500 uppercase mb-1">Stock (leave blank for unlimited)</label>
+                  <input
+                    type="number" min="0" value={editingAmenity.stock ?? ''}
+                    onChange={e => setEditingAmenity({...editingAmenity, stock: e.target.value === '' ? null : Number(e.target.value)})}
                     className="w-full p-3 rounded-xl border border-coffee-200 outline-none focus:ring-2 focus:ring-coffee-500"
                   />
                 </div>

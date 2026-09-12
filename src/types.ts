@@ -125,6 +125,7 @@ export interface Amenity {
   images?: string[];
   location?: string;
   price: number;
+  stock?: number | null;
   status: 'active' | 'inactive';
 }
 

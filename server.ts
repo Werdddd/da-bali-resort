@@ -13,6 +13,7 @@ import nodemailer from "nodemailer";
 import cors from "cors";
 import fs from "fs";
 import { generateInvoicePdf } from "./pdf-invoice";
+import { calculateAmenityItemsTotal, isCottageSelection } from "./src/amenityOptions";
 
 // --- IN-MEMORY LOGGER FOR DEBUGGING ---
 const debugLogs: string[] = [];
@@ -228,6 +229,7 @@ db.exec(`
     image_url TEXT,
     images TEXT,
     price REAL DEFAULT 0,
+    stock INTEGER,
     status TEXT DEFAULT 'active'
   );
 
@@ -244,6 +246,7 @@ db.exec(`
     deposit_amount REAL DEFAULT 0,
     balance_amount REAL DEFAULT 0,
     is_archived INTEGER DEFAULT 0,
+    stock_decremented INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(user_id) REFERENCES users(id),
     FOREIGN KEY(amenity_id) REFERENCES amenities(id)
@@ -627,6 +630,16 @@ try {
 try {
   db.prepare("ALTER TABLE amenities ADD COLUMN price REAL DEFAULT 0").run();
 } catch (e) {}
+// Migration: Ensure stock exists in amenities (NULL = unlimited stock)
+try {
+  db.prepare("ALTER TABLE amenities ADD COLUMN stock INTEGER").run();
+} catch (e) {}
+// Tracks whether a unit of stock has already been taken for this booking, so a booking
+// that oscillates confirmed -> pending_verification (balance payment) -> confirmed again
+// isn't double-decremented or falsely blocked as "out of stock" on its second confirmation.
+try {
+  db.prepare("ALTER TABLE amenity_bookings ADD COLUMN stock_decremented INTEGER DEFAULT 0").run();
+} catch (e) {}
 try {
   db.prepare("ALTER TABLE amenity_bookings ADD COLUMN total_price REAL DEFAULT 0").run();
 } catch (e) {}
@@ -707,16 +720,6 @@ for (const a of amenitiesToSeed) {
   }
 }
 
-// Remove any other amenities that are not in the list if we want it to be EXACTLY 4
-// But maybe the user wants to be able to add more later, so I'll just ensure these 4 exist.
-// The request says "there are 4 amenities", implying these are the ones.
-// I'll delete others to be safe and match "there are 4".
-db.prepare("DELETE FROM amenities WHERE name NOT IN (?, ?, ?, ?)").run(
-  amenitiesToSeed[0].name,
-  amenitiesToSeed[1].name,
-  amenitiesToSeed[2].name,
-  amenitiesToSeed[3].name
-);
 }
 
 try {
@@ -870,6 +873,19 @@ async function startServer() {
       console.error("isStaffOrAdmin middleware error:", e);
       res.status(500).json({ error: "Internal server error in authorization check" });
     }
+  };
+
+  // Resolves the caller's identity from session (normal browser auth) or x-user-id/
+  // x-user-role headers (fallback used elsewhere in this file for iframe preview
+  // environments where the session cookie doesn't reliably reach the server).
+  const getAuthContext = (req: express.Request) => {
+    const sessionUserId = (req.session as any)?.userId;
+    const sessionUserRole = (req.session as any)?.userRole;
+    const headerUserId = req.headers['x-user-id'];
+    const headerUserRole = req.headers['x-user-role'];
+    const userId = sessionUserId || headerUserId;
+    const userRole = sessionUserRole || headerUserRole;
+    return { userId, userRole, isStaff: userRole === 'admin' || userRole === 'staff' };
   };
 
   // Auth Routes
@@ -1174,9 +1190,9 @@ async function startServer() {
   });
 
   app.post("/api/amenities", isAdmin, (req, res) => {
-    const { name, description, icon, image_url, images } = req.body;
+    const { name, description, icon, image_url, images, stock, price } = req.body;
     try {
-      const info = db.prepare("INSERT INTO amenities (name, description, icon, image_url, images) VALUES (?, ?, ?, ?, ?)").run(name, description, icon, image_url, images ? JSON.stringify(images) : "[]");
+      const info = db.prepare("INSERT INTO amenities (name, description, icon, image_url, images, stock, price) VALUES (?, ?, ?, ?, ?, ?, ?)").run(name, description, icon, image_url, images ? JSON.stringify(images) : "[]", stock === '' || stock === undefined ? null : stock, price === '' || price === undefined ? 0 : price);
       const amenity = db.prepare("SELECT * FROM amenities WHERE id = ?").get(info.lastInsertRowid) as any;
       
       console.log(`Admin ${req.session.userId} created amenity: ${name}`);
@@ -1192,10 +1208,10 @@ async function startServer() {
   });
 
   app.put("/api/amenities/:id", isAdmin, (req, res) => {
-    const { name, description, icon, image_url, images, status } = req.body;
+    const { name, description, icon, image_url, images, status, stock, price } = req.body;
     const { id } = req.params;
     try {
-      const result = db.prepare("UPDATE amenities SET name = ?, description = ?, icon = ?, image_url = ?, images = ?, status = ? WHERE id = ?").run(name, description, icon, image_url, images ? JSON.stringify(images) : "[]", status, id);
+      const result = db.prepare("UPDATE amenities SET name = ?, description = ?, icon = ?, image_url = ?, images = ?, status = ?, stock = ?, price = ? WHERE id = ?").run(name, description, icon, image_url, images ? JSON.stringify(images) : "[]", status, stock === '' || stock === undefined ? null : stock, price === '' || price === undefined ? 0 : price, id);
       
       if (result.changes === 0) {
         return res.status(404).json({ error: "Amenity not found." });
@@ -1497,8 +1513,22 @@ async function startServer() {
     const { proofOfPayment, transactionReference, amountPaid } = req.body;
     const { id } = req.params;
     try {
-      const booking = db.prepare("SELECT total_price FROM amenity_bookings WHERE id = ?").get(id) as any;
-      const paymentStatus = (booking && amountPaid >= booking.total_price) ? 'Fully Paid' : 'Partially Paid';
+      const booking = db.prepare("SELECT total_price, deposit_amount, user_id FROM amenity_bookings WHERE id = ?").get(id) as any;
+      if (!booking) return res.status(404).json({ error: "Amenity booking not found" });
+
+      const { userId, isStaff } = getAuthContext(req);
+      const isOwner = !!userId && String(userId) === String(booking.user_id);
+      if (!isOwner && !isStaff) {
+        return res.status(403).json({ error: "Unauthorized" });
+      }
+
+      const amountPaidNum = Number(amountPaid) || 0;
+      const requiredDeposit = booking.deposit_amount || 0;
+      if ((booking.total_price || 0) > 0 && amountPaidNum < requiredDeposit - 0.1) {
+        return res.status(400).json({ error: `The required deposit for this reservation is ₱${requiredDeposit.toLocaleString()}. Please pay at least this amount before submitting.` });
+      }
+
+      const paymentStatus = amountPaidNum >= booking.total_price ? 'Fully Paid' : 'Partially Paid';
 
       db.prepare(`
         UPDATE amenity_bookings 
@@ -1509,8 +1539,8 @@ async function startServer() {
             payment_status = ?,
             admin_notes = NULL
         WHERE id = ?
-      `).run(proofOfPayment, transactionReference, amountPaid, paymentStatus, id);
-      
+      `).run(proofOfPayment, transactionReference, amountPaidNum, paymentStatus, id);
+
       broadcast({ type: 'AMENITY_BOOKING_UPDATED' });
       res.json({ success: true });
     } catch (e) {
@@ -1524,6 +1554,18 @@ async function startServer() {
     try {
       const existingBooking = db.prepare("SELECT * FROM amenity_bookings WHERE id = ?").get(id) as any;
       if (!existingBooking) return res.status(404).json({ error: "Amenity booking not found" });
+
+      const { userId, isStaff } = getAuthContext(req);
+      const isOwner = !!userId && String(userId) === String(existingBooking.user_id);
+      if (!isOwner && !isStaff) {
+        return res.status(403).json({ error: "Unauthorized" });
+      }
+      // MANUAL_SETTLEMENT records an in-person cash payment on the guest's behalf —
+      // staff-only, otherwise a guest could self-report a fake settlement (no proof
+      // required for this path) and mark their own balance as paid.
+      if (req.body.transactionReference === 'MANUAL_SETTLEMENT' && !isStaff) {
+        return res.status(403).json({ error: "Unauthorized" });
+      }
 
       // Use existing payment status on guest report, admin will verify
       const currentPaymentStatus = existingBooking.payment_status || 'Pending';
@@ -1819,15 +1861,8 @@ async function startServer() {
 
       if (!booking) return res.status(404).json({ error: "Amenity booking not found" });
 
-      const sessionUserId = (req.session as any)?.userId;
-      const sessionUserRole = (req.session as any)?.userRole;
-      const headerUserId = req.headers['x-user-id'];
-      const headerUserRole = req.headers['x-user-role'];
-      const userId = sessionUserId || headerUserId;
-      const userRole = sessionUserRole || headerUserRole;
-
-      const isOwner = userId && String(userId) === String(booking.user_id);
-      const isStaff = userRole === 'admin' || userRole === 'staff';
+      const { userId, isStaff } = getAuthContext(req);
+      const isOwner = !!userId && String(userId) === String(booking.user_id);
       if (!isOwner && !isStaff) {
         return res.status(403).json({ error: "Unauthorized" });
       }
@@ -1896,7 +1931,7 @@ async function startServer() {
 
   app.post("/api/amenity-bookings", (req, res) => {
     try {
-      const { user_id, amenity_id, reservation_date, reservation_time, pax_count, details, proofOfPayment, paymentMethod, transactionReference, amountPaid, total_price } = req.body;
+      const { user_id, amenity_id, reservation_date, reservation_time, pax_count, details, proofOfPayment, paymentMethod, transactionReference, amountPaid, selections } = req.body;
       
       // Verify user exists
       if (user_id) {
@@ -1907,9 +1942,14 @@ async function startServer() {
       }
 
       // Verify amenity exists
-      const amenity = db.prepare("SELECT name, price FROM amenities WHERE id = ?").get(amenity_id) as { name: string, price: number } | undefined;
+      const amenity = db.prepare("SELECT name, price, stock FROM amenities WHERE id = ?").get(amenity_id) as { name: string, price: number, stock: number | null } | undefined;
       if (!amenity) {
         return res.status(404).json({ error: "The selected amenity no longer exists. Please refresh and try again." });
+      }
+
+      // Block overbooking once available stock is exhausted (NULL stock = unlimited)
+      if (amenity.stock !== null && amenity.stock !== undefined && amenity.stock <= 0) {
+        return res.status(400).json({ error: "Sorry, this amenity is currently out of stock." });
       }
 
       // Availability check for Pavilion
@@ -1928,15 +1968,27 @@ async function startServer() {
         }
       }
 
-      const totalPrice = total_price || (amenity?.price || 0);
-      
+      // Total price is always computed here from trusted server-side data (the amenity's
+      // configured price, or its item menu) — the client's own total is never trusted,
+      // so a tampered request can't change what the guest is actually charged.
+      const itemsTotal = calculateAmenityItemsTotal(amenity.name, selections);
+      const totalPrice = itemsTotal !== null ? itemsTotal : (amenity.price || 0);
+
       // Full payment for cottage reservations (Infinity Pool / Tent / Umbrella)
-      const isCottage = details && (details.includes('Tent') || details.includes('Umbrella'));
+      const isCottage = isCottageSelection(amenity.name, selections);
       const depositAmount = isCottage ? totalPrice : totalPrice * 0.5;
       const balanceAmount = totalPrice - depositAmount;
       const status = proofOfPayment ? 'pending_verification' : 'pending';
+      const amountPaidNum = Number(amountPaid) || 0;
 
-      const info = db.prepare("INSERT INTO amenity_bookings (user_id, amenity_id, reservation_date, reservation_time, pax_count, details, total_price, deposit_amount, balance_amount, proof_of_payment, payment_method, status, transaction_reference, amount_paid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(user_id, amenity_id, reservation_date, reservation_time, pax_count, details, totalPrice, depositAmount, balanceAmount, proofOfPayment, paymentMethod, status, transactionReference, amountPaid);
+      // A reservation can't even be created below the required deposit — this is
+      // enforced server-side (not just hidden/blocked in the UI) so the booking table
+      // never accumulates underpaid, ambiguous-status requests.
+      if (totalPrice > 0 && amountPaidNum < depositAmount - 0.1) {
+        return res.status(400).json({ error: `The required deposit for this reservation is ₱${depositAmount.toLocaleString()}. Please pay at least this amount before submitting.` });
+      }
+
+      const info = db.prepare("INSERT INTO amenity_bookings (user_id, amenity_id, reservation_date, reservation_time, pax_count, details, total_price, deposit_amount, balance_amount, proof_of_payment, payment_method, status, transaction_reference, amount_paid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(user_id, amenity_id, reservation_date, reservation_time, pax_count, details, totalPrice, depositAmount, balanceAmount, proofOfPayment, paymentMethod, status, transactionReference, amountPaidNum);
       const booking = db.prepare("SELECT * FROM amenity_bookings WHERE id = ?").get(info.lastInsertRowid);
       if (!booking) {
         return res.status(500).json({ error: "Failed to retrieve amenity booking after creation" });
@@ -1954,16 +2006,62 @@ async function startServer() {
       const { status, admin_notes } = req.body;
       const { id } = req.params;
 
+      const existingBooking = db.prepare("SELECT * FROM amenity_bookings WHERE id = ?").get(id) as any;
+      if (!existingBooking) {
+        return res.status(404).json({ error: "Amenity booking not found" });
+      }
+
+      // This endpoint serves two very different callers: staff/admin verifying,
+      // confirming, checking in/out, or annotating a booking; and a guest cancelling
+      // their own still-pending (not yet paid/verified) reservation. Only those two
+      // cases are allowed — anything else (e.g. a guest trying to confirm their own
+      // booking, or cancel one that's already being processed) is rejected.
+      const { userId, isStaff } = getAuthContext(req);
+      const isOwner = !!userId && String(userId) === String(existingBooking.user_id);
+      const isGuestSelfCancel = isOwner && status === 'cancelled' && existingBooking.status === 'pending' && admin_notes === undefined;
+
+      if (!isStaff && !isGuestSelfCancel) {
+        return res.status(403).json({ error: "Unauthorized: Staff or admin access required" });
+      }
+
       if (status) {
-        if (status === 'confirmed') {
-          const booking = db.prepare("SELECT * FROM amenity_bookings WHERE id = ?").get(id) as any;
-          if (booking) {
-            const totalPaid = (booking.amount_paid || 0) + (booking.balance_amount_paid || 0);
-            const totalPrice = booking.total_price || 0;
-            const newPaymentStatus = totalPaid >= totalPrice ? 'Fully Paid' : 'Partially Paid';
-            db.prepare("UPDATE amenity_bookings SET status = ?, payment_status = ? WHERE id = ?").run(status, newPaymentStatus, id);
+        const isNowUnconfirmed = ['cancelled', 'rejected', 'no-show'].includes(status);
+
+        // Require full payment before check-in — the "Pay Balance" flow lets the guest
+        // settle the remaining amount beforehand; the admin cannot bypass this by
+        // calling the API directly even though the UI already hides the button.
+        if (status === 'checked-in') {
+          const totalPaid = (existingBooking.amount_paid || 0) + (existingBooking.balance_amount_paid || 0);
+          const totalPrice = existingBooking.total_price || 0;
+          if (totalPaid < totalPrice - 0.1) {
+            return res.status(400).json({ error: "Cannot check in: the guest still has an outstanding balance. Ask them to complete payment first." });
           }
+        }
+
+        if (status === 'confirmed') {
+          // A booking is confirmed once for the deposit, then again after the guest
+          // pays and re-verifies the balance (status cycles back to pending_verification
+          // in between) — stock_decremented ensures the unit is only ever taken once
+          // per booking, not once per verification pass.
+          if (!existingBooking.stock_decremented) {
+            const amenity = db.prepare("SELECT stock FROM amenities WHERE id = ?").get(existingBooking.amenity_id) as { stock: number | null } | undefined;
+            if (amenity && amenity.stock !== null && amenity.stock !== undefined) {
+              if (amenity.stock <= 0) {
+                return res.status(400).json({ error: "Cannot confirm this booking: no stock available for this amenity." });
+              }
+              db.prepare("UPDATE amenities SET stock = stock - 1 WHERE id = ?").run(existingBooking.amenity_id);
+            }
+            db.prepare("UPDATE amenity_bookings SET stock_decremented = 1 WHERE id = ?").run(id);
+          }
+          const totalPaid = (existingBooking.amount_paid || 0) + (existingBooking.balance_amount_paid || 0);
+          const totalPrice = existingBooking.total_price || 0;
+          const newPaymentStatus = totalPaid >= totalPrice ? 'Fully Paid' : 'Partially Paid';
+          db.prepare("UPDATE amenity_bookings SET status = ?, payment_status = ? WHERE id = ?").run(status, newPaymentStatus, id);
         } else {
+          if (existingBooking.stock_decremented && isNowUnconfirmed) {
+            db.prepare("UPDATE amenities SET stock = stock + 1 WHERE id = ? AND stock IS NOT NULL").run(existingBooking.amenity_id);
+            db.prepare("UPDATE amenity_bookings SET stock_decremented = 0 WHERE id = ?").run(id);
+          }
           db.prepare("UPDATE amenity_bookings SET status = ? WHERE id = ?").run(status, id);
         }
       }
@@ -2021,7 +2119,11 @@ async function startServer() {
   app.delete("/api/amenity-bookings/:id", isStaffOrAdmin, (req, res) => {
     const { id } = req.params;
     try {
-      db.prepare("UPDATE amenity_bookings SET status = 'cancelled' WHERE id = ?").run(id);
+      const existingBooking = db.prepare("SELECT status, amenity_id, stock_decremented FROM amenity_bookings WHERE id = ?").get(id) as any;
+      if (existingBooking && existingBooking.stock_decremented) {
+        db.prepare("UPDATE amenities SET stock = stock + 1 WHERE id = ? AND stock IS NOT NULL").run(existingBooking.amenity_id);
+      }
+      db.prepare("UPDATE amenity_bookings SET status = 'cancelled', stock_decremented = 0 WHERE id = ?").run(id);
       broadcast({ type: 'AMENITY_BOOKING_UPDATED' });
       res.json({ success: true });
     } catch (e) {
@@ -2841,9 +2943,9 @@ async function startServer() {
 
       // Do same for amenity bookings
       db.prepare(`
-        UPDATE amenity_bookings 
-        SET status = 'completed' 
-        WHERE status = 'confirmed' 
+        UPDATE amenity_bookings
+        SET status = 'completed'
+        WHERE (status = 'confirmed' OR status = 'checked-in')
         AND reservation_date < ?
       `).run(today);
 
