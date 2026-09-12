@@ -146,6 +146,16 @@ const transporter = nodemailer.createTransport({
   },
 });
 
+// A room can only be reserved while its housekeeping status is 'available'; this message
+// explains why to whoever tried (guest checkout form or front-desk walk-in form).
+function roomUnavailableMessage(status: string): string {
+  if (status === 'dirty') return "This room is being turned over by housekeeping and isn't ready for a new guest yet.";
+  if (status === 'in_progress') return "This room is currently being cleaned and isn't ready for a new guest yet.";
+  if (status === 'maintenance') return "This room is under maintenance and is not available for booking.";
+  if (status === 'occupied') return "This room is currently occupied.";
+  return "This room is not currently available for booking.";
+}
+
 const sendEmail = async (to: string, subject: string, text: string, html?: string) => {
   try {
     if (!process.env.SMTP_USER) {
@@ -298,6 +308,12 @@ try {
 } catch (e) {}
 try {
   db.prepare("ALTER TABLE users ADD COLUMN position TEXT").run();
+} catch (e) {}
+try {
+  db.prepare("ALTER TABLE rooms ADD COLUMN last_cleaned_at TEXT").run();
+} catch (e) {}
+try {
+  db.prepare("ALTER TABLE rooms ADD COLUMN housekeeping_notes TEXT").run();
 } catch (e) {}
 
 try {
@@ -505,6 +521,18 @@ db.exec(`
     status TEXT DEFAULT 'present',
     date TEXT,
     FOREIGN KEY(user_id) REFERENCES users(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS housekeeping_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id INTEGER,
+    staff_id INTEGER,
+    previous_status TEXT,
+    new_status TEXT,
+    notes TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(room_id) REFERENCES rooms(id),
+    FOREIGN KEY(staff_id) REFERENCES users(id)
   );
 `);
 
@@ -875,6 +903,46 @@ async function startServer() {
     }
   };
 
+  // Middleware to check if user is housekeeping, staff, or admin (used by the housekeeping module,
+  // kept separate from isStaffOrAdmin so housekeeping accounts don't inherit access to
+  // staff-only endpoints like payments/DTR/bookings).
+  const isHousekeepingStaff = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    try {
+      const isApiRequest = req.path.startsWith('/api/') ||
+                           req.originalUrl.startsWith('/api/') ||
+                           req.headers.accept?.includes('application/json') ||
+                           req.headers['content-type']?.includes('application/json');
+
+      const sessionUserId = (req.session as any)?.userId;
+      const sessionUserRole = (req.session as any)?.userRole;
+
+      const headerUserId = req.headers['x-user-id'];
+      const headerUserRole = req.headers['x-user-role'];
+
+      const userId = sessionUserId || headerUserId;
+      const userRole = sessionUserRole || headerUserRole;
+
+      if (userId && (userRole === 'admin' || userRole === 'staff' || userRole === 'housekeeping')) {
+        (req as any).adminId = userId;
+        next();
+      } else {
+        console.warn(`[isHousekeepingStaff] Unauthorized access attempt to ${req.method} ${req.originalUrl} by user ${userId || 'anonymous'} (Role: ${userRole || 'none'})`);
+
+        if (isApiRequest) {
+          return res.status(403).json({
+            error: "Unauthorized: Housekeeping, staff, or admin access required",
+            debug: { userId, userRole }
+          });
+        }
+
+        res.status(403).json({ error: "Unauthorized: Housekeeping, staff, or admin access required" });
+      }
+    } catch (e) {
+      console.error("isHousekeepingStaff middleware error:", e);
+      res.status(500).json({ error: "Internal server error in authorization check" });
+    }
+  };
+
   // Resolves the caller's identity from session (normal browser auth) or x-user-id/
   // x-user-role headers (fallback used elsewhere in this file for iframe preview
   // environments where the session cookie doesn't reliably reach the server).
@@ -1074,7 +1142,7 @@ async function startServer() {
   // Room Routes
   app.get("/api/staff", isStaffOrAdmin, (req, res) => {
     try {
-      const staff = db.prepare("SELECT id, first_name, last_name, username, role, schedule, position FROM users WHERE role IN ('admin', 'staff')").all();
+      const staff = db.prepare("SELECT id, first_name, last_name, username, role, schedule, position FROM users WHERE role IN ('admin', 'staff', 'housekeeping')").all();
       res.json(staff);
     } catch (e) {
       res.status(500).json({ error: "Failed to fetch staff" });
@@ -1174,6 +1242,115 @@ async function startServer() {
     }
   });
 
+  // Housekeeping Routes
+  // Daily Room Turnover List & Cleanup Schedule: every active room enriched with today's
+  // checkout (if any) and the next upcoming check-in, so housekeeping can prioritize cleaning.
+  app.get("/api/housekeeping/rooms", isHousekeepingStaff, (req, res) => {
+    try {
+      const rooms = db.prepare("SELECT * FROM rooms WHERE status != 'inactive' ORDER BY name ASC").all() as any[];
+      const today = new Date().toISOString().split('T')[0];
+
+      const activeBookings = db.prepare(`
+        SELECT b.*, u.first_name as first_name, u.last_name as last_name, u.email as email
+        FROM bookings b
+        LEFT JOIN users u ON b.user_id = u.id
+        WHERE b.is_archived = 0 AND b.status IN ('confirmed', 'checked-in')
+        ORDER BY b.check_in ASC
+      `).all() as any[];
+
+      const result = rooms.map(r => {
+        const roomBookings = activeBookings.filter(b => b.room_id === r.id);
+        // The stay currently occupying the room right now (if any) — covers multi-night stays
+        // whose checkout is later than today, not just same-day checkouts.
+        const currentOccupancy = roomBookings.find(b => b.check_in <= today && b.check_out >= today) || null;
+        const checkoutToday = (currentOccupancy && currentOccupancy.check_out === today) ? currentOccupancy : null;
+        const nextBooking = roomBookings
+          .filter(b => b !== currentOccupancy && b.check_in >= today)
+          .sort((a, b) => a.check_in.localeCompare(b.check_in))[0] || null;
+
+        return {
+          ...r,
+          images: r.images ? JSON.parse(r.images) : [],
+          checkout_today: checkoutToday,
+          current_occupancy: currentOccupancy,
+          next_booking: nextBooking
+        };
+      });
+
+      res.json(result);
+    } catch (e) {
+      console.error("GET /api/housekeeping/rooms failed:", e);
+      res.status(500).json({ error: "Failed to fetch housekeeping room list" });
+    }
+  });
+
+  app.get("/api/housekeeping/logs", isHousekeepingStaff, (req, res) => {
+    try {
+      const logs = db.prepare(`
+        SELECT hl.*, r.name as room_name, u.first_name as staff_first_name, u.last_name as staff_last_name
+        FROM housekeeping_logs hl
+        LEFT JOIN rooms r ON hl.room_id = r.id
+        LEFT JOIN users u ON hl.staff_id = u.id
+        ORDER BY hl.created_at DESC
+        LIMIT 100
+      `).all();
+      res.json(logs);
+    } catch (e) {
+      console.error("GET /api/housekeeping/logs failed:", e);
+      res.status(500).json({ error: "Failed to fetch housekeeping logs" });
+    }
+  });
+
+  app.patch("/api/rooms/:id/housekeeping-status", isHousekeepingStaff, (req, res) => {
+    const { id } = req.params;
+    const { status, notes } = req.body;
+    const allowedStatuses = ['available', 'dirty', 'in_progress', 'maintenance'];
+
+    if (!allowedStatuses.includes(status)) {
+      return res.status(400).json({ error: "Invalid housekeeping status. Must be one of: available, dirty, in_progress, maintenance." });
+    }
+
+    try {
+      const room = db.prepare("SELECT * FROM rooms WHERE id = ?").get(id) as any;
+      if (!room) {
+        return res.status(404).json({ error: "Room not found." });
+      }
+
+      // A guest is physically in the room: housekeeping can't clear it for the next guest,
+      // and taking it out of service here would erase the fact that it's occupied.
+      if (room.status === 'occupied' && (status === 'available' || status === 'maintenance')) {
+        return res.status(400).json({ error: "This room is currently occupied. Wait for guest checkout before changing its housekeeping status." });
+      }
+
+      const { userId } = getAuthContext(req);
+      const params: any[] = [status];
+      let setClause = "status = ?";
+      if (notes !== undefined) {
+        setClause += ", housekeeping_notes = ?";
+        params.push(notes || null);
+      }
+      if (status === 'available') {
+        setClause += ", last_cleaned_at = ?";
+        params.push(new Date().toISOString());
+      }
+      params.push(id);
+
+      db.prepare(`UPDATE rooms SET ${setClause} WHERE id = ?`).run(...params);
+      db.prepare(`
+        INSERT INTO housekeeping_logs (room_id, staff_id, previous_status, new_status, notes)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(id, userId || null, room.status, status, notes || null);
+
+      console.log(`User ${userId} updated housekeeping status for room ID ${id}: ${room.status} -> ${status}`);
+      broadcast({ type: 'HOUSEKEEPING_UPDATED' });
+      broadcast({ type: 'ROOMS_UPDATED' });
+      res.json({ success: true });
+    } catch (e) {
+      console.error("Update housekeeping status error:", e);
+      res.status(400).json({ error: "Failed to update housekeeping status." });
+    }
+  });
+
   // Amenity Routes
   app.get("/api/amenities", (req, res) => {
     console.log("GET /api/amenities requested");
@@ -1248,15 +1425,21 @@ async function startServer() {
   app.get("/api/bookings/check-availability", (req, res) => {
     try {
       const { roomId, checkIn, checkOut } = req.query;
+
+      const room = db.prepare("SELECT status FROM rooms WHERE id = ?").get(roomId) as { status: string } | undefined;
+      if (room && room.status !== 'available') {
+        return res.json({ available: false, reason: roomUnavailableMessage(room.status) });
+      }
+
       const conflict = db.prepare(`
-        SELECT * FROM bookings 
-        WHERE room_id = ? 
+        SELECT * FROM bookings
+        WHERE room_id = ?
         AND status NOT IN ('cancelled', 'completed', 'Completed', 'no-show')
         AND is_archived = 0
-        AND check_in < ? 
+        AND check_in < ?
         AND check_out > ?
       `).get(roomId, checkOut, checkIn);
-      
+
       res.json({ available: !conflict });
     } catch (e) {
       console.error("Check availability error:", e);
@@ -1276,21 +1459,24 @@ async function startServer() {
         }
       }
 
-      // Verify room exists
+      // Verify room exists and is currently bookable
       if (roomId) {
-        const room = db.prepare("SELECT id FROM rooms WHERE id = ?").get(roomId);
+        const room = db.prepare("SELECT id, status FROM rooms WHERE id = ?").get(roomId) as { id: number; status: string } | undefined;
         if (!room) {
           return res.status(404).json({ error: "The selected room no longer exists. Please refresh and try again." });
+        }
+        if (room.status !== 'available') {
+          return res.status(400).json({ error: roomUnavailableMessage(room.status) });
         }
       }
 
       // Final check for availability
       const conflict = db.prepare(`
-        SELECT * FROM bookings 
-        WHERE room_id = ? 
+        SELECT * FROM bookings
+        WHERE room_id = ?
         AND status NOT IN ('cancelled', 'completed', 'Completed', 'no-show')
         AND is_archived = 0
-        AND check_in < ? 
+        AND check_in < ?
         AND check_out > ?
       `).get(roomId, checkOut, checkIn);
 
@@ -1380,8 +1566,17 @@ async function startServer() {
           // Automatic Room Status Revert/Update
           const booking = db.prepare("SELECT room_id FROM bookings WHERE id = ?").get(id) as { room_id: number } | undefined;
           if (booking) {
-            if (status === 'Completed' || status === 'cancelled') {
-              db.prepare("UPDATE rooms SET status = 'available' WHERE id = ?").run(booking.room_id);
+            if (status === 'Completed') {
+              // Guest checked out: the room needs cleaning before it can be booked again.
+              db.prepare("UPDATE rooms SET status = 'dirty' WHERE id = ? AND status != 'maintenance'").run(booking.room_id);
+              db.prepare(`
+                INSERT INTO housekeeping_logs (room_id, staff_id, previous_status, new_status, notes)
+                VALUES (?, NULL, 'occupied', 'dirty', 'Auto-flagged after guest checkout')
+              `).run(booking.room_id);
+              broadcast({ type: 'HOUSEKEEPING_UPDATED' });
+            } else if (status === 'cancelled') {
+              // Booking never occupied the room, so no cleaning is needed.
+              db.prepare("UPDATE rooms SET status = 'available' WHERE id = ? AND status != 'maintenance'").run(booking.room_id);
             } else if (status === 'checked-in') {
               db.prepare("UPDATE rooms SET status = 'occupied' WHERE id = ?").run(booking.room_id);
             }
@@ -1783,7 +1978,15 @@ async function startServer() {
   app.post("/api/bookings/walk-in", (req, res) => {
     try {
       const { roomId, checkIn, checkOut, totalPrice, guestsCount, extraBed, firstName, lastName, email, contactNo } = req.body;
-      
+
+      const room = db.prepare("SELECT id, status FROM rooms WHERE id = ?").get(roomId) as { id: number; status: string } | undefined;
+      if (!room) {
+        return res.status(404).json({ error: "The selected room no longer exists. Please refresh and try again." });
+      }
+      if (room.status !== 'available') {
+        return res.status(400).json({ error: roomUnavailableMessage(room.status) });
+      }
+
       // Final check for availability
       const conflict = db.prepare(`
         SELECT * FROM bookings 
@@ -2863,12 +3066,14 @@ async function startServer() {
   });
 
   app.post("/api/staff/create-manual", isAdmin, (req, res) => {
-    const { firstName, lastName, workSchedule, position } = req.body;
+    const { firstName, lastName, workSchedule, position, role } = req.body;
+    // Only 'staff' and 'housekeeping' can be assigned here; admin accounts are never created via this endpoint.
+    const assignedRole = role === 'housekeeping' ? 'housekeeping' : 'staff';
     try {
       // Create a dummy username and password for manually added staff
       const username = `staff_${firstName.toLowerCase()}_${lastName.toLowerCase()}_${Date.now()}`;
       const password = bcrypt.hashSync("temporary_password", 10);
-      const info = db.prepare("INSERT INTO users (username, password, first_name, last_name, role, schedule, position) VALUES (?, ?, ?, ?, 'staff', ?, ?)").run(username, password, firstName, lastName, workSchedule, position || 'Staff');
+      const info = db.prepare("INSERT INTO users (username, password, first_name, last_name, role, schedule, position) VALUES (?, ?, ?, ?, ?, ?, ?)").run(username, password, firstName, lastName, assignedRole, workSchedule, position || (assignedRole === 'housekeeping' ? 'Housekeeping' : 'Staff'));
       const user = db.prepare("SELECT id, username, first_name, last_name, role, schedule, position FROM users WHERE id = ?").get(info.lastInsertRowid);
       res.json(user);
     } catch (e) {
@@ -2927,12 +3132,23 @@ async function startServer() {
       
       // 1. Mark as 'completed' if check_out date has passed and they were confirmed or checked-in
       db.prepare(`
-        UPDATE bookings 
-        SET status = 'completed' 
-        WHERE (status = 'confirmed' OR status = 'checked-in') 
+        UPDATE bookings
+        SET status = 'completed'
+        WHERE (status = 'confirmed' OR status = 'checked-in')
         AND check_out < ?
       `).run(today);
-      
+
+      // Rooms left occupied past their checkout date need cleaning before they can be rebooked.
+      const autoCheckedOutRooms = db.prepare(`
+        UPDATE rooms SET status = 'dirty'
+        WHERE status = 'occupied'
+        AND id IN (SELECT room_id FROM bookings WHERE status = 'completed' AND check_out < ?)
+      `).run(today);
+      if (autoCheckedOutRooms.changes > 0) {
+        broadcast({ type: 'HOUSEKEEPING_UPDATED' });
+        broadcast({ type: 'ROOMS_UPDATED' });
+      }
+
       // 2. Mark as 'no-show' if they never checked in and the whole period has passed
       db.prepare(`
         UPDATE bookings 

@@ -58,6 +58,9 @@ import {
   Loader2,
   TrendingUp,
   Printer,
+  Sparkles,
+  Wrench,
+  ClipboardList,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, addDays, differenceInDays, isBefore, startOfToday, getDaysInMonth, startOfMonth } from 'date-fns';
@@ -66,6 +69,8 @@ import { User, Room, Booking, Analytics, Amenity, Feedback, StaffRecord, Amenity
 import { AMENITY_OPTIONS } from './amenityOptions';
 import { DTRDashboard } from './components/DTRDashboard';
 import { TimePickerModal } from './components/TimePickerModal';
+import { HousekeepingDashboard } from './components/HousekeepingDashboard';
+import { getRoomStatusLabel, getRoomStatusBadgeClass } from './utils/roomStatus';
 import bgImage from './476799607_640944451796572_5504544646714415496_n.jpg';
 
 // --- Amenity Images ---
@@ -538,9 +543,9 @@ const Navbar = ({ user, onLogout, onNavigate, page }: { user: User | null, onLog
 
   const menuItems = [];
   if (user) {
-    menuItems.push({ 
-      name: user.role === 'admin' ? 'Admin Dashboard' : user.role === 'staff' ? 'Staff Dashboard' : 'User Dashboard', 
-      action: () => onNavigate(user.role === 'admin' || user.role === 'staff' ? 'admin-dashboard' : 'guest-dashboard') 
+    menuItems.push({
+      name: user.role === 'admin' ? 'Admin Dashboard' : user.role === 'staff' ? 'Staff Dashboard' : user.role === 'housekeeping' ? 'Housekeeping Dashboard' : 'User Dashboard',
+      action: () => onNavigate(user.role === 'admin' || user.role === 'staff' || user.role === 'housekeeping' ? 'admin-dashboard' : 'guest-dashboard')
     });
     menuItems.push({ name: 'Logout', action: onLogout });
   } else {
@@ -1248,36 +1253,49 @@ const Hero = ({ onBookNow, heroBanners, currentSlide, setCurrentSlide }: {
   );
 };
 
-const RoomCard = ({ room, onBook }: { room: Room, onBook: (room: Room) => void }) => (
-  <motion.div 
-    whileHover={{ y: -10 }}
-    className="bg-white rounded-2xl overflow-hidden shadow-md border border-coffee-100 h-full flex flex-col"
-  >
-    <div className="h-64 relative overflow-hidden">
-      <ImageSlider 
-        images={room.images && room.images.length > 0 ? room.images : [room.image_url]} 
-        className="w-full h-full"
-      />
-      <div className="absolute top-4 right-4 bg-white/90 px-3 py-1 rounded-lg text-coffee-900 font-bold shadow-sm z-10">
-        ₱{(room.price || 0).toLocaleString()} <span className="text-xs font-normal text-coffee-600">/night</span>
+const RoomCard = ({ room, onBook }: { room: Room, onBook: (room: Room) => void }) => {
+  const isBookable = room.status === 'available';
+  return (
+    <motion.div
+      whileHover={isBookable ? { y: -10 } : undefined}
+      className="bg-white rounded-2xl overflow-hidden shadow-md border border-coffee-100 h-full flex flex-col"
+    >
+      <div className="h-64 relative overflow-hidden">
+        <ImageSlider
+          images={room.images && room.images.length > 0 ? room.images : [room.image_url]}
+          className="w-full h-full"
+        />
+        <div className="absolute top-4 right-4 bg-white/90 px-3 py-1 rounded-lg text-coffee-900 font-bold shadow-sm z-10">
+          ₱{(room.price || 0).toLocaleString()} <span className="text-xs font-normal text-coffee-600">/night</span>
+        </div>
+        {!isBookable && (
+          <div className={`absolute top-4 left-4 px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider shadow-sm z-10 ${getRoomStatusBadgeClass(room.status)}`}>
+            {room.status === 'occupied' ? 'Currently Occupied' : getRoomStatusLabel(room.status)}
+          </div>
+        )}
       </div>
-    </div>
-    <div className="p-6 flex-1 flex flex-col">
-      <h3 className="text-xl font-serif font-bold mb-2 text-coffee-900">{room.name}</h3>
-      <p className="text-coffee-600 text-sm mb-4 line-clamp-2">{room.description}</p>
-      <div className="flex items-center justify-between text-xs text-coffee-500 mb-6 mt-auto">
-        <span className="flex items-center"><UserIcon className="h-3 w-3 mr-1" /> Up to {room.capacity} Guests</span>
-        <span className="flex items-center"><Bed className="h-3 w-3 mr-1" /> {room.beds}</span>
+      <div className="p-6 flex-1 flex flex-col">
+        <h3 className="text-xl font-serif font-bold mb-2 text-coffee-900">{room.name}</h3>
+        <p className="text-coffee-600 text-sm mb-4 line-clamp-2">{room.description}</p>
+        <div className="flex items-center justify-between text-xs text-coffee-500 mb-6 mt-auto">
+          <span className="flex items-center"><UserIcon className="h-3 w-3 mr-1" /> Up to {room.capacity} Guests</span>
+          <span className="flex items-center"><Bed className="h-3 w-3 mr-1" /> {room.beds}</span>
+        </div>
+        <button
+          onClick={() => isBookable && onBook(room)}
+          disabled={!isBookable}
+          className={`w-full py-3 rounded-xl font-bold transition-all ${
+            isBookable
+              ? 'bg-white text-[#A3402A] border border-[#A3402A] hover:bg-[#A3402A] hover:text-white active:scale-95'
+              : 'bg-coffee-100 text-coffee-400 border border-coffee-100 cursor-not-allowed'
+          }`}
+        >
+          {isBookable ? 'Book Now' : 'Unavailable'}
+        </button>
       </div>
-      <button 
-        onClick={() => onBook(room)}
-        className="w-full bg-white text-[#A3402A] border border-[#A3402A] py-3 rounded-xl font-bold transition-all hover:bg-[#A3402A] hover:text-white active:scale-95"
-      >
-        Book Now
-      </button>
-    </div>
-  </motion.div>
-);
+    </motion.div>
+  );
+};
 
 const ProofUploadModal = ({ booking, onClose, onUpload, isUploading, setToastMessage, isBalance = false }: { 
   booking: Booking, 
@@ -3071,7 +3089,7 @@ export default function App() {
   const [isCheckingIn, setIsCheckingIn] = useState(false);
   const [feedbackForm, setFeedbackForm] = useState({ rating: 5, comment: '' });
   const [proofFile, setProofFile] = useState<string | null>(null);
-  const [adminActiveTab, setAdminActiveTab] = useState<'overview' | 'reservations' | 'rooms' | 'amenities' | 'dtr' | 'payments' | 'slideshow' | 'staff-records' | 'messages'>('overview');
+  const [adminActiveTab, setAdminActiveTab] = useState<'overview' | 'reservations' | 'rooms' | 'amenities' | 'dtr' | 'payments' | 'slideshow' | 'staff-records' | 'messages' | 'housekeeping'>('overview');
   const [staffRecordsTab, setStaffRecordsTab] = useState<'directory' | 'management' | 'history'>('directory');
   const [reservationsTab, setReservationsTab] = useState<'all' | 'accommodation' | 'amenity'>('all');
   const [reservationFilter, setReservationFilter] = useState<'Upcoming' | 'Completed' | 'Archived'>('Upcoming');
@@ -3796,7 +3814,7 @@ export default function App() {
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        if (data.type === 'BOOKING_CREATED' || data.type === 'BOOKING_UPDATED' || data.type === 'FEEDBACK_ADDED' || data.type === 'DTR_UPDATED' || data.type === 'HERO_BANNERS_UPDATED' || data.type === 'AMENITY_BOOKING_UPDATED' || data.type === 'AMENITY_BOOKING_CREATED' || data.type === 'AMENITIES_UPDATED') {
+        if (data.type === 'BOOKING_CREATED' || data.type === 'BOOKING_UPDATED' || data.type === 'FEEDBACK_ADDED' || data.type === 'DTR_UPDATED' || data.type === 'HERO_BANNERS_UPDATED' || data.type === 'AMENITY_BOOKING_UPDATED' || data.type === 'AMENITY_BOOKING_CREATED' || data.type === 'AMENITIES_UPDATED' || data.type === 'HOUSEKEEPING_UPDATED' || data.type === 'ROOMS_UPDATED') {
           fetchRooms().catch(console.error);
           fetchFeedbacks().catch(console.error);
           fetchHeroBanners().catch(console.error);
@@ -3998,16 +4016,16 @@ export default function App() {
     finally { setIsCheckingIn(false); }
   };
 
-  const handleCreateStaff = async (firstName: string, lastName: string, workSchedule: string, position: string) => {
+  const handleCreateStaff = async (firstName: string, lastName: string, workSchedule: string, position: string, role: 'staff' | 'housekeeping' = 'staff') => {
     try {
       const res = await fetch('/api/staff/create-manual', {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
           'x-user-id': user?.id?.toString() || '',
           'x-user-role': user?.role || ''
         },
-        body: JSON.stringify({ firstName, lastName, workSchedule, position })
+        body: JSON.stringify({ firstName, lastName, workSchedule, position, role })
       });
       if (res.ok) {
         setShowAddStaffModal(false);
@@ -4422,10 +4440,10 @@ export default function App() {
         } catch(e) {}
         throw new Error(errMessage);
       }
-      const { available } = await availRes.json();
+      const { available, reason } = await availRes.json();
 
       if (!available) {
-        setBookingError('Sorry, this room is already occupied for the selected dates.');
+        setBookingError(reason || 'Sorry, this room is already occupied for the selected dates.');
         setIsBooking(false);
         return;
       }
@@ -5152,8 +5170,9 @@ export default function App() {
   );
 
   const renderRooms = () => {
-    const salakotRooms = rooms.filter(r => r.name.includes('Salakot'));
-    const bubuRooms = rooms.filter(r => r.name.includes('Bubu'));
+    const bookableRooms = rooms.filter(r => r.status !== 'inactive');
+    const salakotRooms = bookableRooms.filter(r => r.name.includes('Salakot'));
+    const bubuRooms = bookableRooms.filter(r => r.name.includes('Bubu'));
 
     return (
       <div className="max-w-7xl mx-auto px-4 py-16 space-y-20">
@@ -6772,6 +6791,7 @@ export default function App() {
       { id: 'amenities', label: 'Amenity Management', icon: <Flower className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
       { id: 'slideshow', label: 'Slideshow Management', icon: <LayoutDashboard className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
       { id: 'staff-records', label: 'Staff Records', icon: <Users className="h-4 w-4 stroke-[1.5]" />, roles: ['admin', 'staff'] },
+      { id: 'housekeeping', label: 'Housekeeping', icon: <Sparkles className="h-4 w-4 stroke-[1.5]" />, roles: ['admin', 'staff', 'housekeeping'] },
       { id: 'messages', label: 'Support Chat', icon: <MessageSquare className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'], badge: totalUnreadMessages },
     ].filter(item => item.roles.includes(user?.role || ''));
 
@@ -6945,6 +6965,27 @@ export default function App() {
                         onExport={exportStaffRecordsToCSV}
                         onExportAttendance={handleExportAttendance}
                         view={staffRecordsTab === 'directory' ? 'dashboard' : staffRecordsTab === 'management' ? 'management' : 'history'}
+                      />
+                    </motion.div>
+                  )}
+                  {adminActiveTab === 'housekeeping' && (
+                    <motion.div
+                      key="housekeeping"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      className="w-full min-h-full flex flex-col gap-y-6"
+                    >
+                      <div className="max-w-6xl mx-auto w-full">
+                        <div className="mb-2">
+                          <h1 className="text-4xl font-serif font-bold text-coffee-900">Housekeeping</h1>
+                          <p className="text-coffee-500 mt-2">Daily room turnover list and cleanup schedule.</p>
+                        </div>
+                      </div>
+                      <HousekeepingDashboard
+                        currentUser={user!}
+                        onRoomsRefresh={fetchRooms}
+                        setToastMessage={setToastMessage}
                       />
                     </motion.div>
                   )}
@@ -7831,8 +7872,8 @@ export default function App() {
                         <div key={room.id} className="bg-white rounded-3xl shadow-sm border border-[#A3402A] overflow-hidden flex group hover:shadow-md transition-all h-fit">
                           <div className="w-32 h-full relative">
                             <img src={room.image_url} className="w-full h-full object-cover" alt={room.name} referrerPolicy="no-referrer" />
-                            <div className={`absolute top-2 left-2 px-2 py-0.5 rounded-full text-[8px] font-bold uppercase ${room.status === 'available' ? 'bg-emerald-500 text-white' : (room.status === 'Inactive' ? 'bg-red-600 text-white' : 'bg-red-500 text-white')}`}>
-                              {room.status}
+                            <div className={`absolute top-2 left-2 px-2 py-0.5 rounded-full text-[8px] font-bold uppercase ${getRoomStatusBadgeClass(room.status)}`}>
+                              {getRoomStatusLabel(room.status)}
                             </div>
                           </div>
                           <div className="flex-1 p-6">
@@ -8658,7 +8699,7 @@ export default function App() {
 
   useEffect(() => {
     if (user) {
-      if (page === 'guest-dashboard' && (user.role === 'admin' || user.role === 'staff')) {
+      if (page === 'guest-dashboard' && (user.role === 'admin' || user.role === 'staff' || user.role === 'housekeeping')) {
         setPage('admin-dashboard');
       } else if (page === 'admin-dashboard' && user.role === 'guest') {
         setPage('guest-dashboard');
@@ -8671,6 +8712,8 @@ export default function App() {
   useEffect(() => {
     if (user?.role === 'staff' && adminActiveTab !== 'staff-records') {
       setAdminActiveTab('staff-records');
+    } else if (user?.role === 'housekeeping' && adminActiveTab !== 'housekeeping') {
+      setAdminActiveTab('housekeeping');
     }
   }, [user, adminActiveTab]);
 

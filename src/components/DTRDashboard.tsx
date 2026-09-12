@@ -33,7 +33,7 @@ interface DTRDashboardProps {
   currentUser: User;
   onCheckIn: (userId: number) => Promise<boolean>;
   onCheckOut: (userId: number) => Promise<boolean>;
-  onAddStaff: (firstName: string, lastName: string, workSchedule: string, position: string) => Promise<void>;
+  onAddStaff: (firstName: string, lastName: string, workSchedule: string, position: string, role: 'staff' | 'housekeeping') => Promise<void>;
   onEditStaff: (staff: User) => void;
   onDeleteStaff: (staffId: number) => Promise<void>;
   fetchAdminData: () => Promise<void>;
@@ -74,6 +74,7 @@ export const DTRDashboard = ({
   const [newStaffFirstName, setNewStaffFirstName] = useState('');
   const [newStaffLastName, setNewStaffLastName] = useState('');
   const [newStaffPosition, setNewStaffPosition] = useState('');
+  const [newStaffRole, setNewStaffRole] = useState<'staff' | 'housekeeping'>('staff');
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [showAddStaffForm, setShowAddStaffForm] = useState(false);
@@ -386,10 +387,11 @@ export const DTRDashboard = ({
                       e.preventDefault();
                       const schedule = `${newStaffStartTime} - ${newStaffEndTime}`;
                       try {
-                        await onAddStaff(newStaffFirstName, newStaffLastName, schedule, newStaffPosition);
+                        await onAddStaff(newStaffFirstName, newStaffLastName, schedule, newStaffPosition, newStaffRole);
                         setNewStaffFirstName('');
                         setNewStaffLastName('');
                         setNewStaffPosition('');
+                        setNewStaffRole('staff');
                         setNewStaffStartTime('08:00');
                         setNewStaffEndTime('17:00');
                         setShowAddStaffForm(false);
@@ -424,16 +426,28 @@ export const DTRDashboard = ({
                     </div>
                     <div className="flex-1 w-full space-y-1.5">
                       <label className="text-[10px] font-bold text-coffee-400 uppercase tracking-widest px-1">Position</label>
-                      <input 
-                        type="text" 
-                        placeholder="Concierge" 
-                        value={newStaffPosition} 
-                        onChange={(e) => setNewStaffPosition(e.target.value)} 
-                        className="w-full px-4 py-2.5 rounded-xl border border-coffee-200 bg-white text-sm outline-none focus:ring-2 focus:ring-coffee-500/20 shadow-sm" 
-                        required 
+                      <input
+                        type="text"
+                        placeholder="Concierge"
+                        value={newStaffPosition}
+                        onChange={(e) => setNewStaffPosition(e.target.value)}
+                        className="w-full px-4 py-2.5 rounded-xl border border-coffee-200 bg-white text-sm outline-none focus:ring-2 focus:ring-coffee-500/20 shadow-sm"
+                        required
                       />
                     </div>
-                    
+
+                    <div className="flex-1 w-full space-y-1.5">
+                      <label className="text-[10px] font-bold text-coffee-400 uppercase tracking-widest px-1">Role</label>
+                      <select
+                        value={newStaffRole}
+                        onChange={(e) => setNewStaffRole(e.target.value as 'staff' | 'housekeeping')}
+                        className="w-full px-4 py-2.5 rounded-xl border border-coffee-200 bg-white text-sm outline-none focus:ring-2 focus:ring-coffee-500/20 shadow-sm"
+                      >
+                        <option value="staff">Staff</option>
+                        <option value="housekeeping">Housekeeping</option>
+                      </select>
+                    </div>
+
                     <div className="flex-[1.5] w-full space-y-1.5">
                       <label className="text-[10px] font-bold text-coffee-400 uppercase tracking-widest px-1">Schedule</label>
                       <div className="flex items-center bg-white rounded-xl border border-coffee-200 overflow-hidden focus-within:ring-2 focus-within:ring-coffee-500/20 transition-all shadow-sm">
@@ -514,8 +528,11 @@ export const DTRDashboard = ({
                                   {staff.role === 'admin' && (
                                     <span className="px-2 py-0.5 bg-coffee-900 text-white text-[8px] font-bold uppercase tracking-widest rounded-full">Admin</span>
                                   )}
+                                  {staff.role === 'housekeeping' && (
+                                    <span className="px-2 py-0.5 bg-emerald-600 text-white text-[8px] font-bold uppercase tracking-widest rounded-full">Housekeeping</span>
+                                  )}
                                 </div>
-                                <p className="text-[10px] text-coffee-400 uppercase tracking-wider">{staff.position || (staff.role === 'admin' ? 'Administrator' : 'Staff')}</p>
+                                <p className="text-[10px] text-coffee-400 uppercase tracking-wider">{staff.position || (staff.role === 'admin' ? 'Administrator' : staff.role === 'housekeeping' ? 'Housekeeping' : 'Staff')}</p>
                               </div>
                             </div>
                           </td>

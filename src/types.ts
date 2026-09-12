@@ -4,13 +4,19 @@ export interface User {
   first_name: string;
   last_name: string;
   email: string;
-  role: 'guest' | 'admin' | 'staff';
+  role: 'guest' | 'admin' | 'staff' | 'housekeeping';
   contact_no?: string;
   address?: string;
   schedule?: string;
   position?: string;
   created_at?: string;
 }
+
+// 'available' and 'occupied' are driven by the booking lifecycle (see server.ts booking status
+// transitions); 'dirty', 'in_progress', and 'maintenance' are driven by the housekeeping module.
+// Only 'available' rooms can be booked (enforced server-side in POST /api/bookings and
+// POST /api/bookings/walk-in).
+export type RoomStatus = 'available' | 'occupied' | 'dirty' | 'in_progress' | 'maintenance' | 'inactive';
 
 export interface Room {
   id: number;
@@ -23,6 +29,25 @@ export interface Room {
   image_url: string;
   images?: string[];
   status: string;
+  last_cleaned_at?: string | null;
+  housekeeping_notes?: string | null;
+  // Populated only by GET /api/housekeeping/rooms
+  checkout_today?: Booking | null;
+  current_occupancy?: Booking | null;
+  next_booking?: Booking | null;
+}
+
+export interface HousekeepingLog {
+  id: number;
+  room_id: number;
+  room_name?: string;
+  staff_id: number | null;
+  staff_first_name?: string;
+  staff_last_name?: string;
+  previous_status: string;
+  new_status: string;
+  notes?: string | null;
+  created_at: string;
 }
 
 export interface Booking {
