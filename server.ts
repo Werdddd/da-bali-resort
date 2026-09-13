@@ -8,7 +8,7 @@ import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import { WebSocketServer, WebSocket } from "ws";
 import { createServer } from "http";
-import { format, addDays, subDays, isSameDay, parseISO, differenceInDays } from "date-fns";
+import { format, addDays, subDays, isSameDay, parseISO, differenceInDays, startOfMonth, addMonths, subMonths } from "date-fns";
 import nodemailer from "nodemailer";
 import cors from "cors";
 import fs from "fs";
@@ -3017,6 +3017,39 @@ async function startServer() {
     }
   });
 
+  // Booked room-nights count any booking that actually held/occupied the room - including
+  // ones already finished ('completed'/'Completed') - and only exclude bookings that never
+  // resulted in occupancy ('cancelled', 'rejected', 'no-show'). This is deliberately not the
+  // same exclusion list used by the "next booking"/availability-check queries elsewhere in
+  // this file, which drop 'completed' too - those are asking "is this room free for a NEW
+  // booking", not "did this room-night get used". Nights are clipped to the
+  // [startDate, endDateExclusive) window so a booking spanning the boundary only contributes
+  // the nights that actually fall inside the period.
+  const computeOccupancyForRange = (startDate: string, endDateExclusive: string) => {
+    const roomCount = db.prepare("SELECT COUNT(*) as count FROM rooms").get() as { count: number };
+
+    const bookedRow = db.prepare(`
+      SELECT COALESCE(SUM(
+        MAX(0.0, MIN(julianday(check_out), julianday(?)) - MAX(julianday(check_in), julianday(?)))
+      ), 0) as nights
+      FROM bookings
+      WHERE status NOT IN ('cancelled', 'rejected', 'no-show')
+        AND is_archived = 0
+        AND check_out > ?
+        AND check_in < ?
+    `).get(endDateExclusive, startDate, startDate, endDateExclusive) as { nights: number };
+
+    const totalDays = differenceInDays(parseISO(endDateExclusive), parseISO(startDate));
+    const bookedRoomNights = bookedRow.nights || 0;
+    const availableRoomNights = roomCount.count * totalDays;
+
+    return {
+      booked_room_nights: Math.round(bookedRoomNights * 100) / 100,
+      available_room_nights: availableRoomNights,
+      occupancy_rate: availableRoomNights > 0 ? bookedRoomNights / availableRoomNights : 0
+    };
+  };
+
   app.get("/api/analytics", isAdmin, (req, res) => {
     try {
       // Only include revenue from bookings that are 'Fully Paid'
@@ -3050,17 +3083,118 @@ async function startServer() {
       const amenityBookingCount = db.prepare("SELECT COUNT(*) as count FROM amenity_bookings").get() as { count: number };
       const userCount = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'guest'").get() as { count: number };
       const roomCount = db.prepare("SELECT COUNT(*) as count FROM rooms").get() as { count: number };
-      
+
+      const now = new Date();
+      const monthStart = format(startOfMonth(now), 'yyyy-MM-dd');
+      const monthEnd = format(startOfMonth(addMonths(now, 1)), 'yyyy-MM-dd');
+      const occupancy = computeOccupancyForRange(monthStart, monthEnd);
+
       res.json({
         revenue: revenue.total || 0,
         monthly_revenue: monthlyRevenue.total || 0,
         bookings: bookingCount.count,
         amenity_bookings: amenityBookingCount.count,
         users: userCount.count,
-        rooms: roomCount.count
+        rooms: roomCount.count,
+        occupancy_rate: occupancy.occupancy_rate,
+        booked_room_nights: occupancy.booked_room_nights,
+        available_room_nights: occupancy.available_room_nights
       });
     } catch (e) {
       console.error("Fetch analytics error:", e);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.get("/api/analytics/detailed", isAdmin, (req, res) => {
+    try {
+      const now = new Date();
+
+      // Last 6 calendar months, oldest to newest, including the current month
+      const months = Array.from({ length: 6 }, (_, idx) => {
+        const monthDate = subMonths(startOfMonth(now), 5 - idx);
+        return {
+          key: format(monthDate, 'yyyy-MM'),
+          label: format(monthDate, 'MMM yyyy'),
+          start: format(monthDate, 'yyyy-MM-dd'),
+          end: format(startOfMonth(addMonths(monthDate, 1)), 'yyyy-MM-dd')
+        };
+      });
+
+      const revenueByMonthRows = db.prepare(`
+        SELECT strftime('%Y-%m', dt) as month, SUM(amt) as revenue
+        FROM (
+          SELECT p.created_at as dt, p.amount as amt
+          FROM payments p JOIN bookings b ON p.booking_id = b.id
+          WHERE b.payment_status = 'Fully Paid'
+          UNION ALL
+          SELECT created_at as dt, (amount_paid + COALESCE(balance_amount_paid, 0)) as amt
+          FROM amenity_bookings
+          WHERE payment_status = 'Fully Paid'
+        )
+        WHERE dt >= ?
+        GROUP BY month
+      `).all(months[0].start) as { month: string; revenue: number }[];
+      const revenueByMonth = new Map(revenueByMonthRows.map(r => [r.month, r.revenue || 0]));
+
+      const revenueTrend = months.map(m => ({ month: m.label, revenue: revenueByMonth.get(m.key) || 0 }));
+
+      const occupancyTrend = months.map(m => {
+        const occ = computeOccupancyForRange(m.start, m.end);
+        return {
+          month: m.label,
+          occupancy_rate: occ.occupancy_rate,
+          booked_room_nights: occ.booked_room_nights,
+          available_room_nights: occ.available_room_nights
+        };
+      });
+
+      const roomTypeBreakdown = db.prepare(`
+        SELECT r.type as type, COUNT(b.id) as bookings, COALESCE(SUM(b.total_price), 0) as revenue
+        FROM bookings b
+        JOIN rooms r ON b.room_id = r.id
+        WHERE b.status NOT IN ('cancelled', 'rejected', 'no-show') AND b.is_archived = 0
+        GROUP BY r.type
+        ORDER BY revenue DESC
+      `).all();
+
+      const amenityBreakdown = db.prepare(`
+        SELECT a.name as name,
+          COUNT(ab.id) as bookings,
+          COALESCE(SUM(ab.amount_paid + COALESCE(ab.balance_amount_paid, 0)), 0) as revenue,
+          a.stock as stock
+        FROM amenities a
+        LEFT JOIN amenity_bookings ab ON ab.amenity_id = a.id AND ab.is_archived = 0
+          AND ab.status NOT IN ('cancelled', 'rejected', 'no-show')
+        GROUP BY a.id
+        ORDER BY revenue DESC
+      `).all();
+
+      const paymentMethodBreakdown = db.prepare(`
+        SELECT COALESCE(method, 'Unknown') as method, COUNT(*) as count, COALESCE(SUM(amount), 0) as total
+        FROM payments
+        GROUP BY method
+        ORDER BY total DESC
+      `).all();
+
+      const bookingStatusBreakdown = db.prepare(`
+        SELECT status, COUNT(*) as count
+        FROM bookings
+        WHERE is_archived = 0
+        GROUP BY status
+        ORDER BY count DESC
+      `).all();
+
+      res.json({
+        revenueTrend,
+        occupancyTrend,
+        roomTypeBreakdown,
+        amenityBreakdown,
+        paymentMethodBreakdown,
+        bookingStatusBreakdown
+      });
+    } catch (e) {
+      console.error("Fetch detailed analytics error:", e);
       res.status(500).json({ error: "Internal server error" });
     }
   });

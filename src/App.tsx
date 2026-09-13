@@ -61,6 +61,8 @@ import {
   Sparkles,
   Wrench,
   ClipboardList,
+  PieChart,
+  Percent,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, addDays, differenceInDays, isBefore, startOfToday, getDaysInMonth, startOfMonth } from 'date-fns';
@@ -70,6 +72,7 @@ import { AMENITY_OPTIONS } from './amenityOptions';
 import { DTRDashboard } from './components/DTRDashboard';
 import { TimePickerModal } from './components/TimePickerModal';
 import { HousekeepingDashboard } from './components/HousekeepingDashboard';
+import { AnalyticsDashboard } from './components/AnalyticsDashboard';
 import { getRoomStatusLabel, getRoomStatusBadgeClass } from './utils/roomStatus';
 import bgImage from './476799607_640944451796572_5504544646714415496_n.jpg';
 
@@ -3089,7 +3092,7 @@ export default function App() {
   const [isCheckingIn, setIsCheckingIn] = useState(false);
   const [feedbackForm, setFeedbackForm] = useState({ rating: 5, comment: '' });
   const [proofFile, setProofFile] = useState<string | null>(null);
-  const [adminActiveTab, setAdminActiveTab] = useState<'overview' | 'reservations' | 'rooms' | 'amenities' | 'dtr' | 'payments' | 'slideshow' | 'staff-records' | 'messages' | 'housekeeping'>('overview');
+  const [adminActiveTab, setAdminActiveTab] = useState<'overview' | 'analytics' | 'reservations' | 'rooms' | 'amenities' | 'dtr' | 'payments' | 'slideshow' | 'staff-records' | 'messages' | 'housekeeping'>('overview');
   const [staffRecordsTab, setStaffRecordsTab] = useState<'directory' | 'management' | 'history'>('directory');
   const [reservationsTab, setReservationsTab] = useState<'all' | 'accommodation' | 'amenity'>('all');
   const [reservationFilter, setReservationFilter] = useState<'Upcoming' | 'Completed' | 'Archived'>('Upcoming');
@@ -6785,6 +6788,7 @@ export default function App() {
 
     const sidebarItems = [
       { id: 'overview', label: 'Overview', icon: <BarChart3 className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
+      { id: 'analytics', label: 'Analytics', icon: <PieChart className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
       { id: 'reservations', label: 'All Reservation', icon: <Calendar className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
       { id: 'payments', label: 'Payments', icon: <CreditCard className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
       { id: 'rooms', label: 'Room Management', icon: <Bed className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
@@ -6989,6 +6993,29 @@ export default function App() {
                       />
                     </motion.div>
                   )}
+                  {adminActiveTab === 'analytics' && (
+                    <motion.div
+                      key="analytics"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      className="w-full min-h-full flex flex-col gap-y-6"
+                    >
+                      <div className="max-w-7xl mx-auto w-full">
+                        <div className="mb-2">
+                          <h1 className="text-4xl font-serif font-bold text-coffee-900">Analytics</h1>
+                          <p className="text-coffee-500 mt-2">Revenue, occupancy, rooms, amenities, and payments at a glance.</p>
+                        </div>
+                      </div>
+                      <div className="max-w-7xl mx-auto w-full">
+                        <AnalyticsDashboard
+                          currentUser={user!}
+                          analytics={analytics}
+                          onRefresh={fetchAnalytics}
+                        />
+                      </div>
+                    </motion.div>
+                  )}
                   {adminActiveTab === 'overview' && (
                     <motion.div
                       key="overview-2"
@@ -7001,12 +7028,14 @@ export default function App() {
                     {[
                       { label: 'Total Revenue', value: `₱${(analytics?.revenue || 0).toLocaleString()}`, icon: <CreditCard className="h-5 w-5" />, color: 'bg-emerald-50 text-emerald-600' },
                       { label: 'Total Monthly Sales', value: `₱${(analytics?.monthly_revenue || 0).toLocaleString()}`, icon: <TrendingUp className="h-5 w-5" />, color: 'bg-emerald-50 text-emerald-600' },
+                      { label: 'Occupancy Rate', value: `${(((analytics?.occupancy_rate || 0) * 100)).toFixed(1)}%`, icon: <Percent className="h-5 w-5" />, color: 'bg-blue-50 text-blue-600' },
                       { label: 'Total Bookings', value: analytics?.bookings, icon: <Calendar className="h-5 w-5" />, color: 'bg-blue-50 text-blue-600' },
                       { label: 'Total Reservations', value: analytics?.amenity_bookings, icon: <Star className="h-5 w-5" />, color: 'bg-indigo-50 text-indigo-600' },
                       { label: 'Active Rooms', value: analytics?.rooms, icon: <Bed className="h-5 w-5" />, color: 'bg-orange-50 text-orange-600' },
                       { label: 'Total Guests', value: analytics?.users, icon: <UserIcon className="h-5 w-5" />, color: 'bg-purple-50 text-purple-600' },
                       { label: 'Total Staff', value: staffMembers.length, icon: <Users className="h-5 w-5" />, color: 'bg-blue-50 text-blue-600' },
-                      { label: 'Present Today', value: (staffRecord || []).filter(r => r.date === format(new Date(), 'yyyy-MM-dd') && r.status === 'present').length, icon: <CheckCircle2 className="h-5 w-5" />, color: 'bg-teal-50 text-teal-600' }
+                      // Temporarily hidden to keep the grid at exactly 8 cards:
+                      // { label: 'Present Today', value: (staffRecord || []).filter(r => r.date === format(new Date(), 'yyyy-MM-dd') && r.status === 'present').length, icon: <CheckCircle2 className="h-5 w-5" />, color: 'bg-teal-50 text-teal-600' }
                     ].map((stat) => (
                       <div key={stat.label} className="bg-white p-4 rounded-2xl border border-[#A3402A] shadow-lg hover:shadow-xl transition-all group overflow-hidden relative">
                         <div className="flex items-center justify-between mb-2">

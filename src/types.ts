@@ -139,6 +139,55 @@ export interface Analytics {
   amenity_bookings: number;
   users: number;
   rooms: number;
+  // Booked room-nights / available room-nights for the current calendar month.
+  occupancy_rate: number;
+  booked_room_nights: number;
+  available_room_nights: number;
+}
+
+export interface AnalyticsMonthPoint {
+  month: string;
+  revenue: number;
+}
+
+export interface OccupancyMonthPoint {
+  month: string;
+  occupancy_rate: number;
+  booked_room_nights: number;
+  available_room_nights: number;
+}
+
+export interface RoomTypeBreakdown {
+  type: string;
+  bookings: number;
+  revenue: number;
+}
+
+export interface AmenityBreakdown {
+  name: string;
+  bookings: number;
+  revenue: number;
+  stock: number | null;
+}
+
+export interface PaymentMethodBreakdown {
+  method: string;
+  count: number;
+  total: number;
+}
+
+export interface BookingStatusBreakdown {
+  status: string;
+  count: number;
+}
+
+export interface AnalyticsDetailed {
+  revenueTrend: AnalyticsMonthPoint[];
+  occupancyTrend: OccupancyMonthPoint[];
+  roomTypeBreakdown: RoomTypeBreakdown[];
+  amenityBreakdown: AmenityBreakdown[];
+  paymentMethodBreakdown: PaymentMethodBreakdown[];
+  bookingStatusBreakdown: BookingStatusBreakdown[];
 }
 
 export interface Amenity {
