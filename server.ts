@@ -534,6 +534,22 @@ db.exec(`
     FOREIGN KEY(room_id) REFERENCES rooms(id),
     FOREIGN KEY(staff_id) REFERENCES users(id)
   );
+
+  CREATE TABLE IF NOT EXISTS audit_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor_id INTEGER,
+    actor_name TEXT,
+    actor_role TEXT,
+    action TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id INTEGER,
+    entity_label TEXT,
+    details TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(actor_id) REFERENCES users(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC);
 `);
 
 // Seed Rooms if empty
@@ -956,6 +972,45 @@ async function startServer() {
     return { userId, userRole, isStaff: userRole === 'admin' || userRole === 'staff' };
   };
 
+  // Records an Admin/Staff action for the Audit Logs viewer (booking status changes,
+  // payment verification, staff/room/amenity edits, etc). The actor's display name is
+  // resolved once at write time so the log stays readable even if that user account is
+  // later deleted. Never throws - a logging failure must not break the action it's logging.
+  const logAuditAction = (
+    req: express.Request,
+    action: string,
+    entityType: string,
+    entityId: number | string | null,
+    entityLabel?: string | null,
+    details?: Record<string, any>
+  ) => {
+    try {
+      const { userId, userRole } = getAuthContext(req);
+      let actorName = 'Unknown';
+      if (userId) {
+        const actor = db.prepare("SELECT first_name, last_name FROM users WHERE id = ?").get(userId) as any;
+        if (actor) {
+          actorName = `${actor.first_name || ''} ${actor.last_name || ''}`.trim() || 'Unknown';
+        }
+      }
+      db.prepare(`
+        INSERT INTO audit_logs (actor_id, actor_name, actor_role, action, entity_type, entity_id, entity_label, details)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        userId || null,
+        actorName,
+        userRole || null,
+        action,
+        entityType,
+        entityId ?? null,
+        entityLabel || null,
+        details ? JSON.stringify(details) : null
+      );
+    } catch (e) {
+      console.error("Failed to write audit log:", e);
+    }
+  };
+
   // Auth Routes
   app.get("/api/auth/me", (req, res) => {
     try {
@@ -1192,6 +1247,7 @@ async function startServer() {
         return res.status(500).json({ error: "Failed to retrieve room after creation" });
       }
       console.log(`Admin ${req.session.userId} created room: ${name}`);
+      logAuditAction(req, 'room_created', 'room', info.lastInsertRowid as number, name);
       broadcast({ type: 'ROOMS_UPDATED' });
       res.json({
         ...room,
@@ -1209,13 +1265,15 @@ async function startServer() {
     const { id } = req.params;
     console.log('PUT /api/rooms/:id id:', id);
     try {
+      const existing = db.prepare("SELECT status FROM rooms WHERE id = ?").get(id) as { status: string } | undefined;
       const result = db.prepare("UPDATE rooms SET name = ?, type = ?, description = ?, price = ?, capacity = ?, beds = ?, image_url = ?, images = ?, status = ? WHERE id = ?").run(name, type, description, price, capacity, beds, image_url, images ? JSON.stringify(images) : "[]", status, id);
-      
+
       if (result.changes === 0) {
         return res.status(404).json({ error: "Room not found." });
       }
 
       console.log(`Admin ${req.session.userId} updated room ID ${id}: ${name}`);
+      logAuditAction(req, 'room_updated', 'room', id, name, { previous_status: existing?.status, new_status: status });
       broadcast({ type: 'ROOMS_UPDATED' });
       res.json({ success: true });
     } catch (e) {
@@ -1227,13 +1285,15 @@ async function startServer() {
   app.delete("/api/rooms/:id", isAdmin, (req, res) => {
     const { id } = req.params;
     try {
+      const existing = db.prepare("SELECT name FROM rooms WHERE id = ?").get(id) as { name: string } | undefined;
       const result = db.prepare("UPDATE rooms SET status = 'inactive' WHERE id = ?").run(id);
-      
+
       if (result.changes === 0) {
         return res.status(404).json({ error: "Room not found." });
       }
 
       console.log(`Admin ${req.session.userId} deactivated room ID ${id}`);
+      logAuditAction(req, 'room_deactivated', 'room', id, existing?.name || null);
       broadcast({ type: 'ROOMS_UPDATED' });
       res.json({ success: true });
     } catch (e) {
@@ -1340,6 +1400,7 @@ async function startServer() {
         INSERT INTO housekeeping_logs (room_id, staff_id, previous_status, new_status, notes)
         VALUES (?, ?, ?, ?, ?)
       `).run(id, userId || null, room.status, status, notes || null);
+      logAuditAction(req, 'housekeeping_status_changed', 'room', id, room.name, { from: room.status, to: status });
 
       console.log(`User ${userId} updated housekeeping status for room ID ${id}: ${room.status} -> ${status}`);
       broadcast({ type: 'HOUSEKEEPING_UPDATED' });
@@ -1373,6 +1434,7 @@ async function startServer() {
       const amenity = db.prepare("SELECT * FROM amenities WHERE id = ?").get(info.lastInsertRowid) as any;
       
       console.log(`Admin ${req.session.userId} created amenity: ${name}`);
+      logAuditAction(req, 'amenity_created', 'amenity', info.lastInsertRowid as number, name, { stock });
       broadcast({ type: 'AMENITIES_UPDATED' });
       res.json({
         ...amenity,
@@ -1388,13 +1450,15 @@ async function startServer() {
     const { name, description, icon, image_url, images, status, stock, price } = req.body;
     const { id } = req.params;
     try {
+      const existing = db.prepare("SELECT stock FROM amenities WHERE id = ?").get(id) as { stock: number | null } | undefined;
       const result = db.prepare("UPDATE amenities SET name = ?, description = ?, icon = ?, image_url = ?, images = ?, status = ?, stock = ?, price = ? WHERE id = ?").run(name, description, icon, image_url, images ? JSON.stringify(images) : "[]", status, stock === '' || stock === undefined ? null : stock, price === '' || price === undefined ? 0 : price, id);
-      
+
       if (result.changes === 0) {
         return res.status(404).json({ error: "Amenity not found." });
       }
 
       console.log(`Admin ${req.session.userId} updated amenity ID ${id}: ${name}`);
+      logAuditAction(req, 'amenity_updated', 'amenity', id, name, { previous_stock: existing?.stock, new_stock: stock });
       broadcast({ type: 'AMENITIES_UPDATED' });
       res.json({ success: true });
     } catch (e) {
@@ -1406,13 +1470,15 @@ async function startServer() {
   app.delete("/api/amenities/:id", isAdmin, (req, res) => {
     const { id } = req.params;
     try {
+      const existing = db.prepare("SELECT name FROM amenities WHERE id = ?").get(id) as { name: string } | undefined;
       const result = db.prepare("UPDATE amenities SET status = 'inactive' WHERE id = ?").run(id);
-      
+
       if (result.changes === 0) {
         return res.status(404).json({ error: "Amenity not found." });
       }
 
       console.log(`Admin ${req.session.userId} deactivated amenity ID ${id}`);
+      logAuditAction(req, 'amenity_deactivated', 'amenity', id, existing?.name || null);
       broadcast({ type: 'AMENITIES_UPDATED' });
       res.json({ success: true });
     } catch (e) {
@@ -1523,6 +1589,7 @@ async function startServer() {
     const { status, admin_notes } = req.body;
     const { id } = req.params;
     try {
+      const beforeBooking = db.prepare("SELECT status FROM bookings WHERE id = ?").get(id) as { status: string } | undefined;
       if (admin_notes !== undefined) {
         db.prepare("UPDATE bookings SET admin_notes = ? WHERE id = ?").run(admin_notes, id);
       }
@@ -1599,14 +1666,23 @@ async function startServer() {
       }
       
       if (status === 'rejected') {
-        broadcast({ 
-          type: 'PAYMENT_REJECTED', 
+        broadcast({
+          type: 'PAYMENT_REJECTED',
           bookingType: 'room',
           bookingId: id,
           userId: (booking as any).user_id,
           notes: admin_notes,
           title: (booking as any).room_name || 'Room'
         });
+      }
+
+      const guestLabel = `${(booking as any).first_name || ''} ${(booking as any).last_name || ''}`.trim() || `Booking #${id}`;
+      if (status) {
+        const auditAction = (status === 'confirmed' && beforeBooking?.status === 'pending_verification') ? 'payment_verified' : 'booking_status_changed';
+        logAuditAction(req, auditAction, 'booking', id, guestLabel, { from: beforeBooking?.status, to: status });
+      }
+      if (admin_notes !== undefined) {
+        logAuditAction(req, 'booking_notes_updated', 'booking', id, guestLabel);
       }
 
       // Broadcast update
@@ -1821,13 +1897,15 @@ async function startServer() {
         
         // Also create a payment record
         db.prepare("INSERT INTO payments (booking_id, amount, method, transaction_id) VALUES (?, ?, ?, ?)").run(
-          id, 
-          booking.amount_paid || 0, 
-          booking.payment_method || 'GCash/BPI', 
+          id,
+          booking.amount_paid || 0,
+          booking.payment_method || 'GCash/BPI',
           booking.transaction_reference || 'N/A'
         );
       }
 
+      const guestLabel = booking ? `${booking.first_name || ''} ${booking.last_name || ''}`.trim() || `Booking #${id}` : `Booking #${id}`;
+      logAuditAction(req, 'payment_verified', 'booking', id, guestLabel, { to: 'confirmed' });
       broadcast({ type: 'BOOKING_UPDATED' });
       res.json({ success: true, qrCode });
     } catch (e) {
@@ -1839,6 +1917,7 @@ async function startServer() {
     const { id } = req.params;
     try {
       db.prepare("UPDATE bookings SET is_archived = 1 WHERE id = ?").run(id);
+      logAuditAction(req, 'booking_archived', 'booking', id, `Booking #${id}`);
       broadcast({ type: 'BOOKING_UPDATED' });
       res.json({ success: true });
     } catch (e) {
@@ -1850,6 +1929,7 @@ async function startServer() {
     const { id } = req.params;
     try {
       db.prepare("UPDATE bookings SET status = 'cancelled' WHERE id = ?").run(id);
+      logAuditAction(req, 'booking_cancelled', 'booking', id, `Booking #${id}`);
       res.json({ success: true });
     } catch (e) {
       res.status(400).json({ error: "Failed to delete booking" });
@@ -2290,14 +2370,27 @@ async function startServer() {
       }
 
       if (status === 'rejected') {
-        broadcast({ 
-          type: 'PAYMENT_REJECTED', 
+        broadcast({
+          type: 'PAYMENT_REJECTED',
           bookingType: 'amenity',
           bookingId: id,
           userId: (booking as any).user_id,
           notes: admin_notes,
           title: (booking as any).amenity_name || 'Amenity'
         });
+      }
+
+      // Only record staff/admin actions here - a guest cancelling their own pending
+      // booking (isGuestSelfCancel) is routine self-service, not an admin/staff action.
+      if (isStaff) {
+        const amenityLabel = (booking as any)?.amenity_name || `Amenity Booking #${id}`;
+        if (status) {
+          const auditAction = status === 'confirmed' ? 'payment_verified' : 'amenity_booking_status_changed';
+          logAuditAction(req, auditAction, 'amenity_booking', id, amenityLabel, { from: existingBooking.status, to: status });
+        }
+        if (admin_notes !== undefined) {
+          logAuditAction(req, 'amenity_booking_notes_updated', 'amenity_booking', id, amenityLabel);
+        }
       }
 
       broadcast({ type: 'AMENITY_BOOKING_UPDATED', booking });
@@ -2312,6 +2405,7 @@ async function startServer() {
     const { id } = req.params;
     try {
       db.prepare("UPDATE amenity_bookings SET is_archived = 1 WHERE id = ?").run(id);
+      logAuditAction(req, 'amenity_booking_archived', 'amenity_booking', id, `Amenity Booking #${id}`);
       broadcast({ type: 'AMENITY_BOOKING_UPDATED' });
       res.json({ success: true });
     } catch (e) {
@@ -2327,6 +2421,7 @@ async function startServer() {
         db.prepare("UPDATE amenities SET stock = stock + 1 WHERE id = ? AND stock IS NOT NULL").run(existingBooking.amenity_id);
       }
       db.prepare("UPDATE amenity_bookings SET status = 'cancelled', stock_decremented = 0 WHERE id = ?").run(id);
+      logAuditAction(req, 'amenity_booking_cancelled', 'amenity_booking', id, `Amenity Booking #${id}`);
       broadcast({ type: 'AMENITY_BOOKING_UPDATED' });
       res.json({ success: true });
     } catch (e) {
@@ -2783,10 +2878,13 @@ async function startServer() {
 
   app.delete("/api/users/:id", isAdmin, (req, res) => {
     try {
+      const existing = db.prepare("SELECT first_name, last_name, role FROM users WHERE id = ?").get(req.params.id) as any;
       db.prepare("DELETE FROM staff_dtr WHERE user_id = ?").run(req.params.id);
       db.prepare("DELETE FROM messages WHERE sender_id = ? OR receiver_id = ?").run(req.params.id, req.params.id);
       // Optional: don't delete bookings if it's a real user, but mostly for staff.
       db.prepare("DELETE FROM users WHERE id = ?").run(req.params.id);
+      const label = existing ? `${existing.first_name || ''} ${existing.last_name || ''}`.trim() : `User #${req.params.id}`;
+      logAuditAction(req, 'user_deleted', 'user', req.params.id, label || `User #${req.params.id}`, { role: existing?.role });
       res.json({ success: true });
     } catch (e) {
       console.error(e);
@@ -3199,6 +3297,47 @@ async function startServer() {
     }
   });
 
+  // Audit Logs: persistent record of Admin/Staff actions (booking status changes,
+  // payment verification, staff/room/amenity edits, etc) - admin-only viewer.
+  app.get("/api/audit-logs", isAdmin, (req, res) => {
+    try {
+      const { action, entityType, actorId, limit, offset } = req.query;
+      const conditions: string[] = [];
+      const params: any[] = [];
+
+      if (action) {
+        conditions.push("action = ?");
+        params.push(action);
+      }
+      if (entityType) {
+        conditions.push("entity_type = ?");
+        params.push(entityType);
+      }
+      if (actorId) {
+        conditions.push("actor_id = ?");
+        params.push(actorId);
+      }
+
+      const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+      const pageLimit = Math.min(Math.max(parseInt(String(limit || '100'), 10) || 100, 1), 500);
+      const pageOffset = Math.max(parseInt(String(offset || '0'), 10) || 0, 0);
+
+      const logs = db.prepare(`
+        SELECT * FROM audit_logs
+        ${whereClause}
+        ORDER BY created_at DESC, id DESC
+        LIMIT ? OFFSET ?
+      `).all(...params, pageLimit, pageOffset);
+
+      const total = (db.prepare(`SELECT COUNT(*) as count FROM audit_logs ${whereClause}`).get(...params) as { count: number }).count;
+
+      res.json({ logs, total });
+    } catch (e) {
+      console.error("GET /api/audit-logs failed:", e);
+      res.status(500).json({ error: "Failed to fetch audit logs" });
+    }
+  });
+
   app.post("/api/staff/create-manual", isAdmin, (req, res) => {
     const { firstName, lastName, workSchedule, position, role } = req.body;
     // Only 'staff' and 'housekeeping' can be assigned here; admin accounts are never created via this endpoint.
@@ -3209,6 +3348,7 @@ async function startServer() {
       const password = bcrypt.hashSync("temporary_password", 10);
       const info = db.prepare("INSERT INTO users (username, password, first_name, last_name, role, schedule, position) VALUES (?, ?, ?, ?, ?, ?, ?)").run(username, password, firstName, lastName, assignedRole, workSchedule, position || (assignedRole === 'housekeeping' ? 'Housekeeping' : 'Staff'));
       const user = db.prepare("SELECT id, username, first_name, last_name, role, schedule, position FROM users WHERE id = ?").get(info.lastInsertRowid);
+      logAuditAction(req, 'staff_created', 'user', info.lastInsertRowid as number, `${firstName} ${lastName}`, { role: assignedRole, position });
       res.json(user);
     } catch (e) {
       res.status(400).json({ error: "Failed to create staff member" });
@@ -3221,6 +3361,7 @@ async function startServer() {
     try {
       db.prepare("UPDATE users SET first_name = ?, last_name = ?, schedule = ?, position = ? WHERE id = ?")
         .run(firstName, lastName, schedule, position, id);
+      logAuditAction(req, 'staff_updated', 'user', id, `${firstName} ${lastName}`, { position, schedule });
       res.json({ success: true });
     } catch (e) {
       res.status(400).json({ error: "Failed to update staff" });

@@ -203,6 +203,19 @@ export interface Amenity {
   status: 'active' | 'inactive';
 }
 
+export interface AuditLog {
+  id: number;
+  actor_id: number | null;
+  actor_name: string;
+  actor_role: string | null;
+  action: string;
+  entity_type: string;
+  entity_id: number | string | null;
+  entity_label: string | null;
+  details: string | null;
+  created_at: string;
+}
+
 export interface HeroBanner {
   id: number;
   title: string;

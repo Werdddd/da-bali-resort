@@ -63,6 +63,7 @@ import {
   ClipboardList,
   PieChart,
   Percent,
+  ScrollText,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, addDays, differenceInDays, isBefore, startOfToday, getDaysInMonth, startOfMonth } from 'date-fns';
@@ -73,6 +74,7 @@ import { DTRDashboard } from './components/DTRDashboard';
 import { TimePickerModal } from './components/TimePickerModal';
 import { HousekeepingDashboard } from './components/HousekeepingDashboard';
 import { AnalyticsDashboard } from './components/AnalyticsDashboard';
+import { AuditLogsDashboard } from './components/AuditLogsDashboard';
 import { getRoomStatusLabel, getRoomStatusBadgeClass } from './utils/roomStatus';
 import bgImage from './476799607_640944451796572_5504544646714415496_n.jpg';
 
@@ -3092,7 +3094,7 @@ export default function App() {
   const [isCheckingIn, setIsCheckingIn] = useState(false);
   const [feedbackForm, setFeedbackForm] = useState({ rating: 5, comment: '' });
   const [proofFile, setProofFile] = useState<string | null>(null);
-  const [adminActiveTab, setAdminActiveTab] = useState<'overview' | 'analytics' | 'reservations' | 'rooms' | 'amenities' | 'dtr' | 'payments' | 'slideshow' | 'staff-records' | 'messages' | 'housekeeping'>('overview');
+  const [adminActiveTab, setAdminActiveTab] = useState<'overview' | 'analytics' | 'reservations' | 'rooms' | 'amenities' | 'dtr' | 'payments' | 'slideshow' | 'staff-records' | 'messages' | 'housekeeping' | 'audit-logs'>('overview');
   const [staffRecordsTab, setStaffRecordsTab] = useState<'directory' | 'management' | 'history'>('directory');
   const [reservationsTab, setReservationsTab] = useState<'all' | 'accommodation' | 'amenity'>('all');
   const [reservationFilter, setReservationFilter] = useState<'Upcoming' | 'Completed' | 'Archived'>('Upcoming');
@@ -6796,6 +6798,7 @@ export default function App() {
       { id: 'slideshow', label: 'Slideshow Management', icon: <LayoutDashboard className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
       { id: 'staff-records', label: 'Staff Records', icon: <Users className="h-4 w-4 stroke-[1.5]" />, roles: ['admin', 'staff'] },
       { id: 'housekeeping', label: 'Housekeeping', icon: <Sparkles className="h-4 w-4 stroke-[1.5]" />, roles: ['admin', 'staff', 'housekeeping'] },
+      { id: 'audit-logs', label: 'Audit Logs', icon: <ScrollText className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
       { id: 'messages', label: 'Support Chat', icon: <MessageSquare className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'], badge: totalUnreadMessages },
     ].filter(item => item.roles.includes(user?.role || ''));
 
@@ -7013,6 +7016,25 @@ export default function App() {
                           analytics={analytics}
                           onRefresh={fetchAnalytics}
                         />
+                      </div>
+                    </motion.div>
+                  )}
+                  {adminActiveTab === 'audit-logs' && (
+                    <motion.div
+                      key="audit-logs"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      className="w-full min-h-full flex flex-col gap-y-6"
+                    >
+                      <div className="max-w-7xl mx-auto w-full">
+                        <div className="mb-2">
+                          <h1 className="text-4xl font-serif font-bold text-coffee-900">Audit Logs</h1>
+                          <p className="text-coffee-500 mt-2">A record of who did what — booking status changes, payment verification, staff/room/amenity edits, and more.</p>
+                        </div>
+                      </div>
+                      <div className="max-w-7xl mx-auto w-full">
+                        <AuditLogsDashboard currentUser={user!} />
                       </div>
                     </motion.div>
                   )}
