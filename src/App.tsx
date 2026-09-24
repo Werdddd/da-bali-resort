@@ -65,8 +65,9 @@ import {
   Percent,
   ScrollText,
   Bot,
+  ImageOff,
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { format, addDays, differenceInDays, isBefore, startOfToday, getDaysInMonth, startOfMonth } from 'date-fns';
 import { QRCodeSVG } from 'qrcode.react';
 import { User, Room, Booking, Analytics, Amenity, Feedback, StaffRecord, AmenityBooking, HeroBanner } from './types';
@@ -469,58 +470,201 @@ const AmenityIcon = ({ name, className }: { name: string, className?: string }) 
 
 // --- Components ---
 
-const ImageSlider = ({ images, className }: { images: string[], className?: string }) => {
-  const [currentIndex, setCurrentIndex] = useState(0);
+// Shared photo carousel for rooms and amenities (the homepage hero uses its own Hero component).
+const SLIDER_SWIPE_OFFSET = 50;
+const SLIDER_SWIPE_VELOCITY = 500;
+const SLIDER_MAX_DOTS = 7;
+const SLIDER_AUTOPLAY_INTERVAL = 5000;
 
-  const next = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setCurrentIndex((prev) => (prev + 1) % images.length);
+const ImageSlider = ({ images, className = '', alt = '', compact = false, autoPlay = true, interval = SLIDER_AUTOPLAY_INTERVAL }: {
+  images: string[],
+  className?: string,
+  alt?: string,
+  compact?: boolean,
+  autoPlay?: boolean,
+  interval?: number
+}) => {
+  const slides = useMemo(
+    () => (Array.isArray(images) ? images.filter((src) => typeof src === 'string' && src.trim() !== '') : []),
+    [images]
+  );
+  const total = slides.length;
+  const [[rawIndex, direction], setSlide] = useState<[number, number]>([0, 0]);
+  const [loaded, setLoaded] = useState<Record<string, boolean>>({});
+  const [failed, setFailed] = useState<Record<string, boolean>>({});
+  const reduceMotion = useReducedMotion();
+
+  // Keep the index valid if the image list shrinks (e.g. after an admin edit)
+  const currentIndex = total > 0 ? Math.min(rawIndex, total - 1) : 0;
+
+  // Preload neighbouring photos so navigating doesn't flash an empty frame
+  useEffect(() => {
+    if (total < 2) return;
+    [slides[(currentIndex + 1) % total], slides[(currentIndex - 1 + total) % total]].forEach((src) => {
+      const img = new Image();
+      img.referrerPolicy = 'no-referrer';
+      img.src = src;
+    });
+  }, [currentIndex, slides, total]);
+
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [isHovered, setIsHovered] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isVisible, setIsVisible] = useState(false);
+  // Per-instance offset so cards on the same page don't all flip in unison
+  const [autoPlayOffset] = useState(() => Math.floor(Math.random() * 1500));
+
+  // Only auto-advance while the carousel is actually on screen
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    if (typeof IntersectionObserver === 'undefined') { setIsVisible(true); return; }
+    const observer = new IntersectionObserver(([entry]) => setIsVisible(entry.isIntersecting), { threshold: 0.3 });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [total > 0]);
+
+  // Auto-advance; restarts whenever the photo changes so manual navigation gets a full interval
+  useEffect(() => {
+    if (!autoPlay || reduceMotion || total < 2 || !isVisible || isHovered || isFocused || isDragging) return;
+    const timer = window.setInterval(() => {
+      if (document.hidden) return;
+      setSlide(([i]) => [(Math.min(i, total - 1) + 1) % total, 1]);
+    }, interval + autoPlayOffset);
+    return () => window.clearInterval(timer);
+  }, [autoPlay, reduceMotion, total, isVisible, isHovered, isFocused, isDragging, interval, autoPlayOffset, currentIndex]);
+
+  if (total === 0) return null;
+
+  const paginate = (step: number) => {
+    setSlide(([i]) => [(((Math.min(i, total - 1) + step) % total) + total) % total, step]);
   };
 
-  const prev = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setCurrentIndex((prev) => (prev - 1 + images.length) % images.length);
+  const goTo = (i: number) => {
+    if (i === currentIndex) return;
+    setSlide([i, i > currentIndex ? 1 : -1]);
   };
 
-  if (!images || !Array.isArray(images) || images.length === 0) return null;
+  const handleArrow = (e: React.MouseEvent, step: number) => {
+    e.stopPropagation();
+    paginate(step);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (total < 2) return;
+    if (e.key === 'ArrowRight') { e.preventDefault(); e.stopPropagation(); paginate(1); }
+    if (e.key === 'ArrowLeft') { e.preventDefault(); e.stopPropagation(); paginate(-1); }
+  };
+
+  const src = slides[currentIndex];
+  const label = alt ? `${alt} photo ${currentIndex + 1} of ${total}` : `Photo ${currentIndex + 1} of ${total}`;
+  const variants = {
+    enter: (dir: number) => (reduceMotion ? { opacity: 0 } : { x: dir >= 0 ? '100%' : '-100%' }),
+    center: { x: 0, opacity: 1 },
+    exit: (dir: number) => (reduceMotion ? { opacity: 0 } : { x: dir >= 0 ? '-100%' : '100%' }),
+  };
 
   return (
-    <div className={`relative group overflow-hidden ${className}`}>
-      <AnimatePresence mode="wait">
-        <motion.img
-          key={currentIndex}
-          src={images[currentIndex]}
-          initial={{ opacity: 0, x: 50 }}
-          animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: -50 }}
-          transition={{ duration: 0.3 }}
-          className="w-full h-full object-cover"
-          referrerPolicy="no-referrer"
-        />
-      </AnimatePresence>
-      
-      {images.length > 1 && (
-        <>
-          <button 
-            onClick={prev}
-            className="absolute left-2 top-1/2 -translate-y-1/2 p-2 bg-black/20 hover:bg-black/40 rounded-full text-white md:opacity-0 md:group-hover:opacity-100 transition-all z-10"
-          >
-            <ChevronLeft className="h-5 w-5" />
-          </button>
-          <button 
-            onClick={next}
-            className="absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-black/20 hover:bg-black/40 rounded-full text-white md:opacity-0 md:group-hover:opacity-100 transition-all z-10"
-          >
-            <ChevronRight className="h-5 w-5" />
-          </button>
-          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
-            {images.map((_, i) => (
-              <div 
-                key={`${currentIndex}-${i}`} 
-                className={`h-1.5 rounded-full transition-all ${i === currentIndex ? 'w-4 bg-white' : 'w-1.5 bg-white/40'}`} 
+    <div
+      ref={containerRef}
+      onPointerEnter={(e) => { if (e.pointerType === 'mouse') setIsHovered(true); }}
+      onPointerLeave={(e) => { if (e.pointerType === 'mouse') setIsHovered(false); }}
+      onFocus={() => setIsFocused(true)}
+      onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setIsFocused(false); }}
+      className={`relative group overflow-hidden bg-coffee-100 select-none ${className}`}
+      role="region"
+      aria-roledescription="carousel"
+      aria-label={alt ? `${alt} photos` : 'Photos'}
+      tabIndex={total > 1 ? 0 : undefined}
+      onKeyDown={handleKeyDown}
+    >
+      <AnimatePresence initial={false} custom={direction}>
+        <motion.div
+          key={`${currentIndex}-${src}`}
+          custom={direction}
+          variants={variants}
+          initial="enter"
+          animate="center"
+          exit="exit"
+          transition={{ duration: reduceMotion ? 0.2 : 0.45, ease: [0.32, 0.72, 0, 1] }}
+          className="absolute inset-0 touch-pan-y"
+          drag={total > 1 ? 'x' : false}
+          dragConstraints={{ left: 0, right: 0 }}
+          dragElastic={0.25}
+          onDragStart={() => setIsDragging(true)}
+          onDragEnd={(_, info) => {
+            setIsDragging(false);
+            if (info.offset.x < -SLIDER_SWIPE_OFFSET || info.velocity.x < -SLIDER_SWIPE_VELOCITY) paginate(1);
+            else if (info.offset.x > SLIDER_SWIPE_OFFSET || info.velocity.x > SLIDER_SWIPE_VELOCITY) paginate(-1);
+          }}
+        >
+          {failed[src] ? (
+            <div className="w-full h-full flex flex-col items-center justify-center gap-2 bg-coffee-100 text-coffee-400">
+              <ImageOff className={compact ? 'h-5 w-5' : 'h-8 w-8'} />
+              {!compact && <span className="text-xs font-medium">Photo unavailable</span>}
+            </div>
+          ) : (
+            <>
+              {!loaded[src] && <div className="absolute inset-0 bg-coffee-100 animate-pulse" />}
+              <img
+                src={src}
+                alt={label}
+                draggable={false}
+                loading={currentIndex === 0 ? 'eager' : 'lazy'}
+                decoding="async"
+                onLoad={() => setLoaded((prev) => (prev[src] ? prev : { ...prev, [src]: true }))}
+                onError={() => setFailed((prev) => ({ ...prev, [src]: true }))}
+                className={`w-full h-full object-cover pointer-events-none transition-opacity duration-300 ${loaded[src] ? 'opacity-100' : 'opacity-0'}`}
+                referrerPolicy="no-referrer"
               />
-            ))}
-          </div>
+            </>
+          )}
+        </motion.div>
+      </AnimatePresence>
+
+      {total > 1 && (
+        <>
+          {/* Soft bottom shade so indicators stay readable on bright photos */}
+          <div className={`absolute inset-x-0 bottom-0 ${compact ? 'h-8' : 'h-16'} bg-gradient-to-t from-black/35 to-transparent pointer-events-none z-10`} />
+
+          <button
+            type="button"
+            aria-label="Previous photo"
+            onClick={(e) => handleArrow(e, -1)}
+            className={`absolute ${compact ? 'left-1 p-1' : 'left-2 p-2'} top-1/2 -translate-y-1/2 bg-black/25 hover:bg-black/50 backdrop-blur-sm rounded-full text-white md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white transition-all z-20`}
+          >
+            <ChevronLeft className={compact ? 'h-3.5 w-3.5' : 'h-5 w-5'} />
+          </button>
+          <button
+            type="button"
+            aria-label="Next photo"
+            onClick={(e) => handleArrow(e, 1)}
+            className={`absolute ${compact ? 'right-1 p-1' : 'right-2 p-2'} top-1/2 -translate-y-1/2 bg-black/25 hover:bg-black/50 backdrop-blur-sm rounded-full text-white md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white transition-all z-20`}
+          >
+            <ChevronRight className={compact ? 'h-3.5 w-3.5' : 'h-5 w-5'} />
+          </button>
+
+          {total > SLIDER_MAX_DOTS || compact ? (
+            <div className={`absolute ${compact ? 'bottom-1.5' : 'bottom-4'} left-1/2 -translate-x-1/2 px-2 py-0.5 rounded-full bg-black/40 text-white text-[10px] font-bold tracking-wider z-20`} aria-live="polite">
+              {currentIndex + 1} / {total}
+            </div>
+          ) : (
+            <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-1 z-20">
+              {slides.map((_, i) => (
+                <button
+                  type="button"
+                  key={i}
+                  aria-label={`Go to photo ${i + 1}`}
+                  aria-current={i === currentIndex}
+                  onClick={(e) => { e.stopPropagation(); goTo(i); }}
+                  className="p-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white rounded-full"
+                >
+                  <span className={`block h-1.5 rounded-full transition-all duration-300 ${i === currentIndex ? 'w-5 bg-white' : 'w-1.5 bg-white/50 hover:bg-white/80'}`} />
+                </button>
+              ))}
+            </div>
+          )}
         </>
       )}
     </div>
@@ -1272,6 +1416,7 @@ const RoomCard = ({ room, onBook }: { room: Room, onBook: (room: Room) => void }
         <ImageSlider
           images={room.images && room.images.length > 0 ? room.images : [room.image_url]}
           className="w-full h-full"
+          alt={room.name}
         />
         <div className="absolute top-4 right-4 bg-white/90 px-3 py-1 rounded-lg text-coffee-900 font-bold shadow-sm z-10">
           ₱{(room.price || 0).toLocaleString()} <span className="text-xs font-normal text-coffee-600">/night</span>
@@ -5107,6 +5252,7 @@ export default function App() {
                     <ImageSlider 
                       images={amenity.images && amenity.images.length > 0 ? amenity.images : [amenity.image_url || "https://picsum.photos/seed/resort/800/600"]} 
                       className="w-full h-full"
+                      alt={amenity.name}
                     />
                   </div>
                   <div className="tablet:w-1/2 p-8 flex flex-col justify-center">
@@ -5134,7 +5280,7 @@ export default function App() {
                 <div key={item.title} className="bg-white rounded-3xl shadow-sm hover:shadow-xl transition-all overflow-hidden flex flex-col tablet:flex-row h-full border border-coffee-50">
                   <div className="tablet:w-1/2 h-64 tablet:h-auto relative overflow-hidden">
                     {item.images ? (
-                      <ImageSlider images={item.images} className="w-full h-full" />
+                      <ImageSlider images={item.images} className="w-full h-full" alt={item.title} />
                     ) : (
                       <img 
                         src={(item as any).img} 
@@ -5305,6 +5451,7 @@ export default function App() {
                   <ImageSlider
                     images={amenity.images && amenity.images.length > 0 ? amenity.images : [amenity.image_url || "https://picsum.photos/seed/resort/800/600"]}
                     className="w-full h-full"
+                    alt={amenity.name}
                   />
                   {amenity.stock !== null && amenity.stock !== undefined && amenity.stock <= 0 && (
                     <div className="absolute top-4 left-4 px-3 py-1 bg-coffee-900/90 text-white text-[10px] font-bold uppercase tracking-wider rounded-full shadow-lg">
@@ -8052,7 +8199,7 @@ export default function App() {
                         <div key={amenity.id} className="bg-white rounded-3xl shadow-sm border border-[#A3402A] overflow-hidden flex group hover:shadow-md transition-all h-fit">
                           <div className="w-32 h-full bg-coffee-50 flex items-center justify-center overflow-hidden">
                             {amenity.images && amenity.images.length > 0 ? (
-                              <ImageSlider images={amenity.images} className="w-full h-full" />
+                              <ImageSlider images={amenity.images} className="w-full h-full" alt={amenity.name} compact />
                             ) : amenity.image_url ? (
                               <img src={amenity.image_url} className="w-full h-full object-cover" alt={amenity.name} referrerPolicy="no-referrer" />
                             ) : (
@@ -8899,6 +9046,7 @@ export default function App() {
               <ImageSlider 
                 images={selectedAmenity.images && selectedAmenity.images.length > 0 ? selectedAmenity.images : [selectedAmenity.image_url || "https://picsum.photos/seed/resort/1200/800"]} 
                 className="w-full h-full"
+                alt={selectedAmenity.name}
               />
               <div className="absolute inset-0 bg-gradient-to-r from-black/40 to-transparent md:hidden pointer-events-none" />
               <button 
