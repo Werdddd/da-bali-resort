@@ -78,6 +78,7 @@ export interface Booking {
   extra_bed: number;
   admin_notes?: string;
   is_archived?: number;
+  has_feedback?: number;
 }
 
 export interface AmenityBooking {
@@ -113,11 +114,17 @@ export interface AmenityBooking {
 export interface Feedback {
   id: number;
   user_id: number;
+  booking_id?: number | null;
   first_name: string;
   last_name: string;
   rating: number;
   comment: string;
   created_at: string;
+  is_hidden?: number;
+  room_name?: string | null;
+  email?: string;
+  check_in?: string | null;
+  check_out?: string | null;
 }
 
 export interface StaffRecord {

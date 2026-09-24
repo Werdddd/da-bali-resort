@@ -575,6 +575,16 @@ db.exec(`
   );
 `);
 
+// Feedback is tied to the stay it reviews (one review per booking) and can be hidden
+// from the public landing page by an admin without deleting it.
+try {
+  db.prepare("ALTER TABLE feedbacks ADD COLUMN booking_id INTEGER REFERENCES bookings(id)").run();
+} catch (e) {}
+try {
+  db.prepare("ALTER TABLE feedbacks ADD COLUMN is_hidden INTEGER DEFAULT 0").run();
+} catch (e) {}
+db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_feedbacks_booking_id ON feedbacks(booking_id) WHERE booking_id IS NOT NULL");
+
 // Seed FAQ Chatbot entries if empty (only once, so admin edits are never overwritten)
 const faqCount = db.prepare("SELECT COUNT(*) as count FROM faq_entries").get() as { count: number };
 if (faqCount.count === 0) {
@@ -2027,9 +2037,10 @@ async function startServer() {
                u.first_name as first_name, 
                u.last_name as last_name, 
                u.email as email,
-               u.contact_no as contact_no
-        FROM bookings b 
-        JOIN rooms r ON b.room_id = r.id 
+               u.contact_no as contact_no,
+               EXISTS (SELECT 1 FROM feedbacks f WHERE f.booking_id = b.id) as has_feedback
+        FROM bookings b
+        JOIN rooms r ON b.room_id = r.id
         LEFT JOIN users u ON b.user_id = u.id
         ORDER BY b.created_at DESC
       `).all();
@@ -2493,12 +2504,22 @@ async function startServer() {
   });
 
   // Feedback Routes
+  const FEEDBACK_COMMENT_MAX = 1000;
+  // A stay can be reviewed while the guest is still checked in (so they're prompted before
+  // front-desk checkout) or any time after it's completed.
+  const REVIEWABLE_BOOKING_STATUSES = ['checked-in', 'Completed', 'completed'];
+
+  // Public list for the landing page - hidden (moderated) reviews are excluded.
   app.get("/api/feedbacks", (req, res) => {
     try {
       const feedbacks = db.prepare(`
-        SELECT f.*, u.first_name, u.last_name
+        SELECT f.id, f.user_id, f.booking_id, f.rating, f.comment, f.created_at,
+               u.first_name, u.last_name, r.name as room_name
         FROM feedbacks f
         JOIN users u ON f.user_id = u.id
+        LEFT JOIN bookings b ON f.booking_id = b.id
+        LEFT JOIN rooms r ON b.room_id = r.id
+        WHERE COALESCE(f.is_hidden, 0) = 0
         ORDER BY f.created_at DESC
       `).all();
       res.json(feedbacks);
@@ -2508,14 +2529,119 @@ async function startServer() {
     }
   });
 
-  app.post("/api/feedbacks", (req, res) => {
-    const { user_id, rating, comment } = req.body;
+  // The signed-in guest's own reviews (including hidden ones), used to know which stays
+  // still need a review.
+  app.get("/api/feedbacks/mine", (req, res) => {
+    const { userId } = getAuthContext(req);
+    if (!userId) return res.status(401).json({ error: "Please sign in to view your feedback" });
     try {
-      db.prepare("INSERT INTO feedbacks (user_id, rating, comment) VALUES (?, ?, ?)").run(user_id, rating, comment);
+      const feedbacks = db.prepare(`
+        SELECT f.*, u.first_name, u.last_name, r.name as room_name
+        FROM feedbacks f
+        JOIN users u ON f.user_id = u.id
+        LEFT JOIN bookings b ON f.booking_id = b.id
+        LEFT JOIN rooms r ON b.room_id = r.id
+        WHERE f.user_id = ?
+        ORDER BY f.created_at DESC
+      `).all(userId);
+      res.json(feedbacks);
+    } catch (e) {
+      console.error("Fetch my feedbacks error:", e);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.post("/api/feedbacks", (req, res) => {
+    const { userId } = getAuthContext(req);
+    if (!userId) return res.status(401).json({ error: "Please sign in to leave feedback" });
+
+    const { booking_id, rating, comment } = req.body || {};
+    const ratingNum = Number(rating);
+    const trimmedComment = typeof comment === 'string' ? comment.trim() : '';
+
+    if (!Number.isInteger(ratingNum) || ratingNum < 1 || ratingNum > 5) {
+      return res.status(400).json({ error: "Rating must be a whole number from 1 to 5" });
+    }
+    if (!trimmedComment) {
+      return res.status(400).json({ error: "Please tell us a little about your stay" });
+    }
+    if (trimmedComment.length > FEEDBACK_COMMENT_MAX) {
+      return res.status(400).json({ error: `Feedback must be ${FEEDBACK_COMMENT_MAX} characters or fewer` });
+    }
+
+    try {
+      const booking = db.prepare("SELECT id, user_id, status FROM bookings WHERE id = ?").get(booking_id) as any;
+      if (!booking || String(booking.user_id) !== String(userId)) {
+        return res.status(404).json({ error: "Booking not found" });
+      }
+      if (!REVIEWABLE_BOOKING_STATUSES.includes(booking.status)) {
+        return res.status(400).json({ error: "You can leave feedback once you've checked in" });
+      }
+      const existing = db.prepare("SELECT id FROM feedbacks WHERE booking_id = ?").get(booking.id);
+      if (existing) {
+        return res.status(409).json({ error: "You've already left feedback for this stay" });
+      }
+
+      db.prepare("INSERT INTO feedbacks (user_id, booking_id, rating, comment) VALUES (?, ?, ?, ?)").run(userId, booking.id, ratingNum, trimmedComment);
       broadcast({ type: 'FEEDBACK_ADDED' });
       res.json({ success: true });
     } catch (e) {
+      console.error("Submit feedback error:", e);
       res.status(400).json({ error: "Failed to submit feedback" });
+    }
+  });
+
+  // Admin moderation: every review, including hidden ones, with the stay it belongs to.
+  app.get("/api/feedbacks/all", isAdmin, (req, res) => {
+    try {
+      const feedbacks = db.prepare(`
+        SELECT f.*, u.first_name, u.last_name, u.email,
+               r.name as room_name, b.check_in, b.check_out
+        FROM feedbacks f
+        JOIN users u ON f.user_id = u.id
+        LEFT JOIN bookings b ON f.booking_id = b.id
+        LEFT JOIN rooms r ON b.room_id = r.id
+        ORDER BY f.created_at DESC
+      `).all();
+      res.json(feedbacks);
+    } catch (e) {
+      console.error("Fetch all feedbacks error:", e);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.patch("/api/feedbacks/:id/visibility", isAdmin, (req, res) => {
+    const isHidden = req.body?.is_hidden ? 1 : 0;
+    try {
+      const feedback = db.prepare(`
+        SELECT f.id, u.first_name, u.last_name FROM feedbacks f JOIN users u ON f.user_id = u.id WHERE f.id = ?
+      `).get(req.params.id) as any;
+      if (!feedback) return res.status(404).json({ error: "Feedback not found" });
+
+      db.prepare("UPDATE feedbacks SET is_hidden = ? WHERE id = ?").run(isHidden, feedback.id);
+      logAuditAction(req, isHidden ? 'feedback_hidden' : 'feedback_unhidden', 'feedback', feedback.id, `${feedback.first_name} ${feedback.last_name}`);
+      broadcast({ type: 'FEEDBACK_ADDED' });
+      res.json({ success: true });
+    } catch (e) {
+      console.error("Update feedback visibility error:", e);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.delete("/api/feedbacks/:id", isAdmin, (req, res) => {
+    try {
+      const feedback = db.prepare(`
+        SELECT f.id, f.rating, u.first_name, u.last_name FROM feedbacks f JOIN users u ON f.user_id = u.id WHERE f.id = ?
+      `).get(req.params.id) as any;
+      if (!feedback) return res.status(404).json({ error: "Feedback not found" });
+
+      db.prepare("DELETE FROM feedbacks WHERE id = ?").run(feedback.id);
+      logAuditAction(req, 'feedback_deleted', 'feedback', feedback.id, `${feedback.first_name} ${feedback.last_name}`, { rating: feedback.rating });
+      broadcast({ type: 'FEEDBACK_ADDED' });
+      res.json({ success: true });
+    } catch (e) {
+      console.error("Delete feedback error:", e);
+      res.status(500).json({ error: "Internal server error" });
     }
   });
 
@@ -3758,7 +3884,8 @@ async function startServer() {
 
       // 2. Post-Checkout (Just checked out)
       const pendingPostCheckout = db.prepare(`
-        SELECT b.*, u.email as guest_email, u.first_name as guest_name
+        SELECT b.*, u.email as guest_email, u.first_name as guest_name,
+               EXISTS (SELECT 1 FROM feedbacks f WHERE f.booking_id = b.id) as has_feedback
         FROM bookings b
         LEFT JOIN users u ON b.user_id = u.id
         WHERE b.status = 'Completed'
@@ -3770,7 +3897,9 @@ async function startServer() {
           await sendEmail(
             booking.guest_email, 
             "Thank you for staying with us!", 
-            `Hi ${booking.guest_name},\n\nThank you for choosing Da Bali Resort. We hope you enjoyed your stay!\n\nPlease rate your experience: ...`
+            booking.has_feedback
+              ? `Hi ${booking.guest_name},\n\nThank you for choosing Da Bali Resort and for sharing your feedback with us. We hope to welcome you back soon!`
+              : `Hi ${booking.guest_name},\n\nThank you for choosing Da Bali Resort. We hope you enjoyed your stay!\n\nWe'd love to hear how it went. Sign in to your Guest Portal and tap "Rate Your Stay" to leave a review.`
           );
           db.prepare("INSERT INTO automated_messages (booking_id, type) VALUES (?, 'post-checkout')").run(booking.id);
         } catch (err) {

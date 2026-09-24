@@ -77,8 +77,10 @@ import { TimePickerModal } from './components/TimePickerModal';
 import { HousekeepingDashboard } from './components/HousekeepingDashboard';
 import { AnalyticsDashboard } from './components/AnalyticsDashboard';
 import { AuditLogsDashboard } from './components/AuditLogsDashboard';
+import { FeedbackManagementDashboard } from './components/FeedbackManagementDashboard';
 import { FaqManagementDashboard } from './components/FaqManagementDashboard';
-import { FaqChatbot } from './components/FaqChatbot';
+import { ResortChatWidget, ChatTab } from './components/ResortChatWidget';
+import { SupportChatMessage } from './components/StaffChatPanel';
 import { getRoomStatusLabel, getRoomStatusBadgeClass } from './utils/roomStatus';
 import bgImage from './476799607_640944451796572_5504544646714415496_n.jpg';
 
@@ -298,140 +300,6 @@ const RoomAvailabilityCalendar = ({ bookings, rooms }: { bookings: Booking[], ro
         )}
       </AnimatePresence>
     </div>
-  );
-};
-
-const ChatModal = ({ 
-  showChat, 
-  setShowChat, 
-  chatMessages, 
-  newMessage, 
-  setNewMessage, 
-  handleSendMessage,
-  onDeleteMessage,
-  unreadCount = 0,
-  onHeartClick
-}: { 
-  showChat: boolean, 
-  setShowChat: (val: boolean) => void, 
-  chatMessages: {sender: string, text: string, id?: number, tempId?: number, has_heart?: number}[], 
-  newMessage: string, 
-  setNewMessage: (val: string) => void, 
-  handleSendMessage: (e: React.FormEvent) => void,
-  onDeleteMessage?: (id: number) => void,
-  unreadCount?: number,
-  onHeartClick?: (id: number) => void
-}) => {
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
-
-  useEffect(() => {
-    if (showChat) {
-      setTimeout(scrollToBottom, 50);
-    }
-  }, [showChat]);
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
-    if (isNearBottom) {
-      setTimeout(scrollToBottom, 50);
-    }
-  }, [chatMessages]);
-
-  return (
-  <div className="fixed bottom-6 right-6 z-[100]">
-      <AnimatePresence>
-        {showChat ? (
-          <motion.div 
-            initial={{ opacity: 0, y: 20, scale: 0.95 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 20, scale: 0.95 }}
-            className="bg-white w-80 h-96 rounded-2xl shadow-2xl border border-coffee-100 flex flex-col overflow-hidden"
-          >
-            <div className="bg-coffee-900 p-4 text-white flex justify-between items-center">
-              <div className="flex items-center">
-                <div className="w-2 h-2 bg-green-500 rounded-full mr-2"></div>
-                <span className="font-bold">Resort Support</span>
-              </div>
-              <button onClick={() => setShowChat(false)}><X className="h-5 w-5" /></button>
-            </div>
-            <div className="flex-1 p-4 overflow-y-auto space-y-4 bg-coffee-50/30" ref={scrollRef}>
-              {chatMessages.map((msg, i) => (
-                <div key={`${msg.sender}-${msg.id || msg.tempId || i}`} className={`flex ${msg.sender === 'You' ? 'justify-start flex-row-reverse' : 'justify-start'} group relative items-center gap-2`}>
-                  <div className={`max-w-[80%] p-3 rounded-2xl text-sm ${msg.sender === 'You' ? 'bg-coffee-800 text-white rounded-tr-none' : 'bg-white text-coffee-900 border border-coffee-100 rounded-tl-none'}`}>
-                    <div className="flex justify-between items-start gap-2">
-                      <p className="text-[10px] opacity-50 mb-1">{msg.sender}</p>
-                      <div className="flex items-center gap-1">
-                        {msg.sender === 'You' && msg.id && onDeleteMessage && (
-                          <button 
-                            onClick={() => onDeleteMessage(msg.id!)}
-                            className="opacity-0 group-hover:opacity-100 p-1 text-red-300 hover:text-red-100 transition-opacity"
-                            title="Delete message"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                    {msg.text}
-                  </div>
-                  <div className="flex flex-col items-center gap-1">
-                    {msg.sender !== 'You' && msg.id && onHeartClick && (
-                      <button 
-                        onClick={() => onHeartClick(msg.id!)}
-                        className={`p-1 transition-opacity ${msg.has_heart ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
-                        title="React with heart"
-                      >
-                        <svg className={`h-4 w-4 ${msg.has_heart ? 'fill-red-500 text-red-500' : 'text-gray-400 hover:text-red-400'}`} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>
-                      </button>
-                    )}
-                    {msg.sender === 'You' && msg.has_heart ? (
-                      <div className="p-1">
-                        <svg className="h-4 w-4 fill-red-500 text-red-500" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-              ))}
-              <div ref={messagesEndRef} />
-            </div>
-            <form onSubmit={handleSendMessage} className="p-3 border-t border-coffee-100 bg-white">
-              <div className="flex gap-2">
-                <input 
-                  value={newMessage}
-                  onChange={(e) => setNewMessage(e.target.value)}
-                  placeholder="Type a message..." 
-                  className="flex-1 bg-coffee-50 p-2 rounded-lg text-sm outline-none focus:ring-1 focus:ring-coffee-500"
-                />
-                <button type="submit" className="bg-coffee-800 text-white p-2 rounded-lg"><ChevronRight className="h-4 w-4" /></button>
-              </div>
-            </form>
-          </motion.div>
-        ) : (
-          <div className="flex items-center gap-3">
-            <motion.button 
-              whileHover={{ scale: 1.1 }}
-              whileTap={{ scale: 0.9 }}
-              onClick={() => setShowChat(true)}
-              className="bg-coffee-800 text-white p-4 rounded-full shadow-xl relative"
-            >
-              <MessageSquare className="h-6 w-6" />
-              {unreadCount > 0 && (
-                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] w-5 h-5 flex items-center justify-center rounded-full font-bold shadow-sm">
-                  {unreadCount}
-                </span>
-              )}
-            </motion.button>
-          </div>
-        )}
-      </AnimatePresence>
-  </div>
   );
 };
 
@@ -869,14 +737,32 @@ const Footer = ({ onNavigate }: { onNavigate: (page: string) => void }) => (
   </footer>
 );
 
-const FeedbackSection = ({ feedbacks }: { feedbacks: Feedback[] }) => (
+const FEEDBACK_RATING_LABELS = ['', 'Poor', 'Fair', 'Good', 'Very Good', 'Excellent'];
+
+const FeedbackSection = ({ feedbacks }: { feedbacks: Feedback[] }) => {
+  const averageRating = feedbacks.length > 0
+    ? feedbacks.reduce((sum, f) => sum + f.rating, 0) / feedbacks.length
+    : 0;
+
+  return (
   <section className="py-20 bg-white">
     <div className="w-full px-4 sm:px-6 lg:px-8">
       <div className="text-center mb-16">
-        <h2 className="text-3xl md:text-4xl font-bold text-coffee-900 mb-4">Guest Feedbacks</h2>
+        <h2 className="text-3xl md:text-4xl font-bold text-coffee-900 mb-4">Guest Reviews</h2>
         <p className="text-coffee-600">See what our guests have to say about their stay at Da Bali Resort.</p>
+        {feedbacks.length > 0 && (
+          <div className="mt-6 inline-flex items-center gap-3 bg-coffee-50 border border-coffee-100 rounded-full px-5 py-2">
+            <span className="text-2xl font-serif font-bold text-coffee-900">{averageRating.toFixed(1)}</span>
+            <div className="flex">
+              {[1, 2, 3, 4, 5].map(star => (
+                <Star key={star} className={`h-4 w-4 ${star <= Math.round(averageRating) ? 'text-yellow-500 fill-yellow-500' : 'text-gray-300'}`} />
+              ))}
+            </div>
+            <span className="text-sm text-coffee-500">{feedbacks.length} {feedbacks.length === 1 ? 'review' : 'reviews'}</span>
+          </div>
+        )}
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 max-w-7xl mx-auto">
         {feedbacks.length > 0 ? feedbacks.slice(0, 6).map((feedback) => (
           <motion.div 
             key={feedback.id}
@@ -890,26 +776,29 @@ const FeedbackSection = ({ feedbacks }: { feedbacks: Feedback[] }) => (
                 <Star key={`${feedback.id}-${i}`} className={`h-4 w-4 ${i < feedback.rating ? 'text-yellow-500 fill-yellow-500' : 'text-gray-300'}`} />
               ))}
             </div>
-            <p className="text-coffee-700 italic mb-4">"{feedback.comment}"</p>
+            <p className="text-coffee-700 italic mb-4 whitespace-pre-line break-words">"{feedback.comment}"</p>
             <div className="flex items-center">
               <div className="h-10 w-10 rounded-full bg-coffee-200 flex items-center justify-center text-coffee-700 font-bold">
-                {feedback.first_name[0]}{feedback.last_name[0]}
+                {feedback.first_name?.[0]}{feedback.last_name?.[0]}
               </div>
               <div className="ml-3">
-                <p className="text-sm font-bold text-coffee-900">{feedback.first_name} {feedback.last_name}</p>
-                <p className="text-xs text-coffee-500">{new Date(feedback.created_at).toLocaleDateString()}</p>
+                <p className="text-sm font-bold text-coffee-900">{feedback.first_name} {feedback.last_name ? `${feedback.last_name[0]}.` : ''}</p>
+                <p className="text-xs text-coffee-500">
+                  {feedback.room_name ? `Stayed in ${feedback.room_name} · ` : ''}{new Date(feedback.created_at).toLocaleDateString()}
+                </p>
               </div>
             </div>
           </motion.div>
         )) : (
           <div className="col-span-full text-center py-10 text-coffee-400">
-            No feedbacks yet. Be the first to leave one!
+            No reviews yet. Stay with us and be the first to share your experience!
           </div>
         )}
       </div>
     </div>
   </section>
-);
+  );
+};
 
 
 const TimeRangePicker = ({ startTime, endTime, onStartChange, onEndChange }: { startTime: string, endTime: string, onStartChange: (val: string) => void, onEndChange: (val: string) => void }) => {
@@ -1229,54 +1118,106 @@ const ExportDTRModal = ({ onClose, onExport, currentYear }: { onClose: () => voi
 
 
 
-const FeedbackFormModal = ({ isOpen, onClose, onSubmit, form, setForm }: { isOpen: boolean, onClose: () => void, onSubmit: (e: React.FormEvent) => void, form: any, setForm: any }) => {
-  if (!isOpen) return null;
+const FEEDBACK_COMMENT_MAX = 1000;
+
+// Front-desk checkout confirmation. For a guest-account room booking with no review yet, it
+// reminds staff to ask for feedback before the guest leaves (walk-ins have no account to review from).
+const getCheckoutConfirmMessage = (booking: Booking | AmenityBooking) => {
+  const isRoomBookingAwaitingReview = !('amenity_name' in booking) && !!booking.user_id && !(booking as Booking).has_feedback;
+  return isRoomBookingAwaitingReview
+    ? 'This guest hasn\'t rated their stay yet. Remind them they can leave a review from their Guest Portal before they go.\n\nAre you sure you want to check out this reservation?'
+    : 'Are you sure you want to check out this reservation?';
+};
+
+const FeedbackFormModal = ({ booking, onClose, onSubmit, form, setForm, isSubmitting, error }: {
+  booking: Booking | null,
+  onClose: () => void,
+  onSubmit: (e: React.FormEvent) => void,
+  form: { rating: number, comment: string },
+  setForm: (form: { rating: number, comment: string }) => void,
+  isSubmitting: boolean,
+  error: string | null
+}) => {
+  const [hoverRating, setHoverRating] = useState(0);
+  if (!booking) return null;
+  const isStillCheckedIn = booking.status === 'checked-in';
+  const shownRating = hoverRating || form.rating;
   return (
     <div className="fixed inset-0 z-[500] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
-        className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl"
+        className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl max-h-[90vh] overflow-y-auto"
       >
-        <div className="p-8">
-          <div className="flex justify-between items-center mb-6">
-            <h3 className="text-2xl font-bold text-coffee-900">Leave a Feedback</h3>
-            <button onClick={onClose} className="p-2 hover:bg-coffee-50 rounded-full transition-colors">
+        <div className="p-6 sm:p-8">
+          <div className="flex justify-between items-start mb-6">
+            <div>
+              <h3 className="text-2xl font-bold text-coffee-900">
+                {isStillCheckedIn ? 'How is your stay?' : 'How was your stay?'}
+              </h3>
+              <p className="text-sm text-coffee-500 mt-1">
+                {booking.room_name} · {format(new Date(booking.check_in), 'MMM dd')} – {format(new Date(booking.check_out), 'MMM dd, yyyy')}
+              </p>
+            </div>
+            <button type="button" onClick={onClose} className="p-2 hover:bg-coffee-50 rounded-full transition-colors" aria-label="Close">
               <X className="h-6 w-6 text-coffee-400" />
             </button>
           </div>
+          {isStillCheckedIn && (
+            <p className="text-sm text-coffee-600 bg-coffee-50 border border-coffee-100 rounded-xl px-4 py-3 mb-6">
+              Before you check out, take a moment to rate your stay. Your feedback helps us improve for every guest.
+            </p>
+          )}
           <form onSubmit={onSubmit} className="space-y-6">
             <div>
               <label className="block text-sm font-bold text-coffee-700 mb-2">Rating</label>
-              <div className="flex gap-2">
+              <div className="flex items-center gap-2" onMouseLeave={() => setHoverRating(0)}>
                 {[1, 2, 3, 4, 5].map((star) => (
                   <button
                     key={star}
                     type="button"
                     onClick={() => setForm({ ...form, rating: star })}
+                    onMouseEnter={() => setHoverRating(star)}
                     className="p-1"
+                    aria-label={`${star} star${star > 1 ? 's' : ''} - ${FEEDBACK_RATING_LABELS[star]}`}
                   >
-                    <Star className={`h-8 w-8 ${star <= form.rating ? 'text-yellow-500 fill-yellow-500' : 'text-gray-300'}`} />
+                    <Star className={`h-8 w-8 ${star <= shownRating ? 'text-yellow-500 fill-yellow-500' : 'text-gray-300'}`} />
                   </button>
                 ))}
+                <span className="ml-2 text-sm font-bold text-coffee-700">{FEEDBACK_RATING_LABELS[shownRating]}</span>
               </div>
             </div>
             <div>
               <label className="block text-sm font-bold text-coffee-700 mb-2">Your Comment</label>
               <textarea
                 required
+                maxLength={FEEDBACK_COMMENT_MAX}
                 value={form.comment}
                 onChange={(e) => setForm({ ...form, comment: e.target.value })}
                 className="w-full px-4 py-3 rounded-xl border border-coffee-200 focus:ring-2 focus:ring-coffee-500 focus:border-transparent outline-none transition-all h-32 resize-none"
-                placeholder="Tell us about your experience..."
+                placeholder="What did you enjoy? What could we do better?"
               />
+              <p className="text-right text-xs text-coffee-400 mt-1">{form.comment.length}/{FEEDBACK_COMMENT_MAX}</p>
             </div>
-            <button
-              type="submit"
-              className="w-full bg-coffee-900 text-white py-4 rounded-xl font-bold hover:bg-coffee-800 transition-all shadow-lg shadow-coffee-900/20"
-            >
-              Submit Feedback
-            </button>
+            {error && (
+              <p className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl px-4 py-3">{error}</p>
+            )}
+            <div className="flex flex-col gap-3">
+              <button
+                type="submit"
+                disabled={isSubmitting || !form.comment.trim()}
+                className="w-full bg-coffee-900 text-white py-4 rounded-xl font-bold hover:bg-coffee-800 transition-all shadow-lg shadow-coffee-900/20 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isSubmitting ? 'Submitting...' : 'Submit Feedback'}
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                className="w-full py-3 rounded-xl font-bold text-coffee-500 hover:bg-coffee-50 transition-all"
+              >
+                Maybe later
+              </button>
+            </div>
           </form>
         </div>
       </motion.div>
@@ -2473,13 +2414,13 @@ const ReceiptModal = ({
                           if (setConfirmDialog) {
                             setConfirmDialog({
                               title: 'Confirm Check Out',
-                              message: 'Are you sure you want to check out this reservation?',
+                              message: getCheckoutConfirmMessage(booking),
                               onConfirm: async () => {
                                 await onUpdateStatus(booking.id, true, 'completed');
                               },
                               onCancel: () => {}
                             });
-                          } else if (window.confirm('Are you sure you want to check out this reservation?')) {
+                          } else if (window.confirm(getCheckoutConfirmMessage(booking))) {
                             await onUpdateStatus(booking.id, true, 'completed');
                           }
                         }}
@@ -2546,13 +2487,13 @@ const ReceiptModal = ({
                               if (setConfirmDialog) {
                                 setConfirmDialog({
                                   title: 'Confirm Check Out',
-                                  message: 'Are you sure you want to check out this reservation?',
+                                  message: getCheckoutConfirmMessage(booking),
                                   onConfirm: async () => {
                                     await onUpdateStatus(booking.id, isAmenity, 'Completed');
                                   },
                                   onCancel: () => {}
                                 });
-                              } else if (window.confirm('Are you sure you want to check out this reservation?')) {
+                              } else if (window.confirm(getCheckoutConfirmMessage(booking))) {
                                 await onUpdateStatus(booking.id, isAmenity, 'Completed');
                               }
                             }}
@@ -2637,13 +2578,13 @@ const ReceiptModal = ({
                               if (setConfirmDialog) {
                                 setConfirmDialog({
                                   title: 'Confirm Check Out',
-                                  message: 'Are you sure you want to check out this reservation?',
+                                  message: getCheckoutConfirmMessage(booking),
                                   onConfirm: async () => {
                                     await onUpdateStatus(booking.id, isAmenity, 'Completed');
                                   },
                                   onCancel: () => {}
                                 });
-                              } else if (window.confirm('Are you sure you want to check out this reservation?')) {
+                              } else if (window.confirm(getCheckoutConfirmMessage(booking))) {
                                 await onUpdateStatus(booking.id, isAmenity, 'Completed');
                               }
                             }}
@@ -3238,11 +3179,18 @@ export default function App() {
   const [editingStaff, setEditingStaff] = useState<User | null>(null);
   const [showEditStaffModal, setShowEditStaffModal] = useState(false);
   const [showAddStaffModal, setShowAddStaffModal] = useState(false);
-  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  // The stay the guest is currently reviewing (null = feedback modal closed).
+  const [feedbackBooking, setFeedbackBooking] = useState<Booking | null>(null);
+  const [myFeedbacks, setMyFeedbacks] = useState<Feedback[]>([]);
+  // Guards the automatic review prompt so it never opens for an already-reviewed stay
+  // before the guest's own reviews have loaded.
+  const [hasLoadedMyFeedbacks, setHasLoadedMyFeedbacks] = useState(false);
+  const [isSubmittingFeedback, setIsSubmittingFeedback] = useState(false);
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const [isCheckingIn, setIsCheckingIn] = useState(false);
   const [feedbackForm, setFeedbackForm] = useState({ rating: 5, comment: '' });
   const [proofFile, setProofFile] = useState<string | null>(null);
-  const [adminActiveTab, setAdminActiveTab] = useState<'overview' | 'analytics' | 'reservations' | 'rooms' | 'amenities' | 'dtr' | 'payments' | 'slideshow' | 'staff-records' | 'messages' | 'housekeeping' | 'audit-logs' | 'faq-chatbot'>('overview');
+  const [adminActiveTab, setAdminActiveTab] = useState<'overview' | 'analytics' | 'reservations' | 'rooms' | 'amenities' | 'dtr' | 'payments' | 'slideshow' | 'staff-records' | 'messages' | 'housekeeping' | 'audit-logs' | 'faq-chatbot' | 'feedback'>('overview');
   const [staffRecordsTab, setStaffRecordsTab] = useState<'directory' | 'management' | 'history'>('directory');
   const [reservationsTab, setReservationsTab] = useState<'all' | 'accommodation' | 'amenity'>('all');
   const [reservationFilter, setReservationFilter] = useState<'Upcoming' | 'Completed' | 'Archived'>('Upcoming');
@@ -3912,6 +3860,7 @@ export default function App() {
         fetchAdminData().catch(console.error);
       } else if (page === 'guest-dashboard') {
         fetchUserBookings(user.id).catch(console.error);
+        fetchMyFeedbacks(user).catch(console.error);
       }
     }
 
@@ -3979,6 +3928,7 @@ export default function App() {
             fetchAdminData().catch(console.error);
           } else if (user) {
             fetchUserBookings(user.id).catch(console.error);
+            fetchMyFeedbacks(user).catch(console.error);
           }
         }
 
@@ -4023,6 +3973,7 @@ export default function App() {
     fetchRooms().catch(console.error);
     fetchAmenities().catch(console.error);
     fetchHeroBanners().catch(console.error);
+    fetchFeedbacks().catch(console.error);
   }, []);
 
   const fetchUserBookings = async (userId: number) => {
@@ -4040,6 +3991,21 @@ export default function App() {
     try {
       const res = await fetch('/api/feedbacks');
       if (res.ok) setFeedbacks(await res.json());
+    } catch (e) { console.error(e); }
+  };
+
+  const fetchMyFeedbacks = async (currentUser: User) => {
+    try {
+      const res = await fetch('/api/feedbacks/mine', {
+        headers: {
+          'x-user-id': currentUser.id.toString(),
+          'x-user-role': currentUser.role || '',
+        }
+      });
+      if (res.ok) {
+        setMyFeedbacks(await res.json());
+        setHasLoadedMyFeedbacks(true);
+      }
     } catch (e) { console.error(e); }
   };
 
@@ -4219,26 +4185,80 @@ export default function App() {
     }
   };
 
+  const openFeedbackModal = (booking: Booking) => {
+    setFeedbackForm({ rating: 5, comment: '' });
+    setFeedbackError(null);
+    setFeedbackBooking(booking);
+  };
+
+  const closeFeedbackModal = () => {
+    // "Maybe later" on the automatic checkout-day prompt shouldn't re-open it for the rest of this session.
+    if (feedbackBooking) {
+      try { sessionStorage.setItem(`feedbackPromptDismissed:${feedbackBooking.id}`, '1'); } catch (e) {}
+    }
+    setFeedbackBooking(null);
+    setFeedbackError(null);
+  };
+
   const handleSubmitFeedback = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user) return;
+    if (!user || !feedbackBooking) return;
+    setIsSubmittingFeedback(true);
+    setFeedbackError(null);
     try {
       const res = await fetch('/api/feedbacks', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': user.id.toString(),
+          'x-user-role': user.role || '',
+        },
         body: JSON.stringify({
-          user_id: user.id,
+          booking_id: feedbackBooking.id,
           rating: feedbackForm.rating,
           comment: feedbackForm.comment
         })
       });
       if (res.ok) {
-        setShowFeedbackModal(false);
+        setFeedbackBooking(null);
         setFeedbackForm({ rating: 5, comment: '' });
+        setToastMessage({ title: 'Thank you!', message: 'Your feedback has been submitted.', type: 'success' });
         fetchFeedbacks().catch(console.error);
+        fetchMyFeedbacks(user).catch(console.error);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setFeedbackError(err.error || 'Failed to submit feedback. Please try again.');
       }
-    } catch (e) { console.error(e); }
+    } catch (e) {
+      console.error(e);
+      setFeedbackError('Failed to submit feedback. Please try again.');
+    } finally {
+      setIsSubmittingFeedback(false);
+    }
   };
+
+  // Stays the guest can still review: currently checked in (prompted before front-desk
+  // checkout) or already completed, and not reviewed yet.
+  const reviewedBookingIds = new Set(myFeedbacks.map(f => f.booking_id));
+  const bookingsAwaitingFeedback = bookings.filter(b =>
+    b.user_id === user?.id &&
+    ((b.status as string) === 'checked-in' || (b.status as string) === 'Completed' || (b.status as string) === 'completed') &&
+    !reviewedBookingIds.has(b.id)
+  );
+  const checkedInAwaitingFeedback = bookingsAwaitingFeedback.find(b => (b.status as string) === 'checked-in');
+
+  // On (or after) the checkout date, pop the review prompt automatically while the guest is
+  // still checked in, so they're asked before the front desk checks them out.
+  useEffect(() => {
+    if (page !== 'guest-dashboard' || !user || feedbackBooking || !hasLoadedMyFeedbacks) return;
+    const today = format(new Date(), 'yyyy-MM-dd');
+    const dueForPrompt = bookingsAwaitingFeedback.find(b => {
+      if ((b.status as string) !== 'checked-in' || b.check_out.slice(0, 10) > today) return false;
+      try { return !sessionStorage.getItem(`feedbackPromptDismissed:${b.id}`); } catch (e) { return true; }
+    });
+    if (dueForPrompt) openFeedbackModal(dueForPrompt);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, user?.id, bookings, myFeedbacks, hasLoadedMyFeedbacks]);
 
   const exportBookingsToCSV = () => {
     downloadServerCsv('/api/bookings/export', `resort_reservations_${format(new Date(), 'yyyy-MM-dd')}.csv`);
@@ -4554,6 +4574,9 @@ export default function App() {
       setUser(null);
       setPage('home');
       setBookings([]);
+      setMyFeedbacks([]);
+      setHasLoadedMyFeedbacks(false);
+      setFeedbackBooking(null);
       resetBookingState();
       resetAmenityBookingState();
       setAuthForm({
@@ -6209,7 +6232,35 @@ export default function App() {
                        <p className="text-base lg:text-lg font-serif font-bold text-coffee-900">{format(new Date(), 'MMMM dd, yyyy')}</p>
                     </div>
                   </div>
-                  
+
+                  {bookingsAwaitingFeedback.length > 0 && (() => {
+                    const promptBooking = checkedInAwaitingFeedback || bookingsAwaitingFeedback[0];
+                    const isBeforeCheckout = (promptBooking.status as string) === 'checked-in';
+                    return (
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 bg-white border border-[#A3402A] rounded-2xl p-4 lg:p-6 shadow-lg">
+                        <div className="h-12 w-12 shrink-0 rounded-full bg-yellow-50 border border-yellow-200 flex items-center justify-center">
+                          <Star className="h-6 w-6 text-yellow-500 fill-yellow-500" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-serif font-bold text-coffee-900 text-lg">
+                            {isBeforeCheckout ? `Enjoying your stay in ${promptBooking.room_name}?` : `How was your stay in ${promptBooking.room_name}?`}
+                          </p>
+                          <p className="text-sm text-coffee-600">
+                            {isBeforeCheckout
+                              ? `Before you check out on ${format(new Date(promptBooking.check_out), 'MMM dd')}, please take a moment to rate your experience.`
+                              : 'We\'d love to hear about your experience. It only takes a minute.'}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => openFeedbackModal(promptBooking)}
+                          className="w-full sm:w-auto shrink-0 bg-[#A3402A] text-white px-6 py-3 rounded-xl font-bold hover:bg-[#8a3624] transition-colors flex items-center justify-center gap-2"
+                        >
+                          <Star className="h-4 w-4" /> Rate Your Stay
+                        </button>
+                      </div>
+                    );
+                  })()}
+
                   <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 flex-grow items-stretch">
                     {/* Recent Bookings - 8/12 */}
                     <div className="lg:col-span-8 bg-white rounded-2xl border border-[#A3402A] overflow-hidden shadow-lg flex flex-col">
@@ -6521,6 +6572,27 @@ export default function App() {
                                         }`}>
                                           {booking.status.replace('_', ' ').toUpperCase()}
                                         </span>
+                                        {(() => {
+                                          const review = myFeedbacks.find(f => f.booking_id === booking.id);
+                                          if (review) {
+                                            return (
+                                              <span className="flex items-center gap-1 text-[10px] lg:text-xs font-bold text-coffee-500 whitespace-nowrap" title="You've reviewed this stay">
+                                                <Star className="h-3.5 w-3.5 text-yellow-500 fill-yellow-500" /> {review.rating}/5 Reviewed
+                                              </span>
+                                            );
+                                          }
+                                          if (bookingsAwaitingFeedback.some(b => b.id === booking.id)) {
+                                            return (
+                                              <button
+                                                onClick={(e) => { e.stopPropagation(); openFeedbackModal(booking); }}
+                                                className="flex items-center gap-1 px-3 py-1 rounded-full border border-[#A3402A] text-[#A3402A] text-[10px] lg:text-xs font-bold hover:bg-[#A3402A] hover:text-white transition-colors whitespace-nowrap"
+                                              >
+                                                <Star className="h-3.5 w-3.5" /> Rate Stay
+                                              </button>
+                                            );
+                                          }
+                                          return null;
+                                        })()}
                                       </div>
                                     </td>
                                   </tr>
@@ -6742,9 +6814,9 @@ export default function App() {
                         >
                           <Settings className="h-4 w-4 mr-2 group-hover:rotate-90 transition-transform" /> Edit Profile
                         </button>
-                        {bookings.filter(b => b.user_id === user?.id).some(b => b.status === 'Completed') && (
-                          <button 
-                            onClick={() => setShowFeedbackModal(true)}
+                        {bookingsAwaitingFeedback.length > 0 && (
+                          <button
+                            onClick={() => openFeedbackModal(checkedInAwaitingFeedback || bookingsAwaitingFeedback[0])}
                             className="flex-1 bg-white text-[#A3402A] border-2 border-[#A3402A] py-2 px-4 lg:py-3.5 rounded-xl lg:rounded-2xl font-bold hover:bg-coffee-50 transition-all flex items-center justify-center group text-xs lg:text-sm shadow-xl"
                           >
                             <Star className="h-4 w-4 mr-2 group-hover:scale-110 transition-transform" /> Leave Feedback
@@ -6948,6 +7020,7 @@ export default function App() {
       { id: 'slideshow', label: 'Slideshow Management', icon: <LayoutDashboard className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
       { id: 'staff-records', label: 'Staff Records', icon: <Users className="h-4 w-4 stroke-[1.5]" />, roles: ['admin', 'staff'] },
       { id: 'housekeeping', label: 'Housekeeping', icon: <Sparkles className="h-4 w-4 stroke-[1.5]" />, roles: ['admin', 'staff', 'housekeeping'] },
+      { id: 'feedback', label: 'Guest Feedback', icon: <Star className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
       { id: 'audit-logs', label: 'Audit Logs', icon: <ScrollText className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
       { id: 'faq-chatbot', label: 'FAQ Chatbot', icon: <Bot className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
       { id: 'messages', label: 'Support Chat', icon: <MessageSquare className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'], badge: totalUnreadMessages },
@@ -7186,6 +7259,25 @@ export default function App() {
                       </div>
                       <div className="max-w-7xl mx-auto w-full">
                         <AuditLogsDashboard currentUser={user!} />
+                      </div>
+                    </motion.div>
+                  )}
+                  {adminActiveTab === 'feedback' && (
+                    <motion.div
+                      key="feedback"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      className="w-full min-h-full flex flex-col gap-y-6"
+                    >
+                      <div className="max-w-7xl mx-auto w-full">
+                        <div className="mb-2">
+                          <h1 className="text-4xl font-serif font-bold text-coffee-900">Guest Feedback</h1>
+                          <p className="text-coffee-500 mt-2">Review what guests say about their stays, and hide or remove reviews from the public website.</p>
+                        </div>
+                      </div>
+                      <div className="max-w-7xl mx-auto w-full">
+                        <FeedbackManagementDashboard currentUser={user!} />
                       </div>
                     </motion.div>
                   )}
@@ -7818,7 +7910,7 @@ export default function App() {
                                                    className="px-2 py-1 bg-purple-600 text-white text-[10px] rounded hover:bg-purple-700"
                                                    onClick={async (e) => {
                                                      e.stopPropagation();
-                                                     if (window.confirm('Are you sure you want to check out this reservation?')) {
+                                                     if (window.confirm(getCheckoutConfirmMessage(booking))) {
                                                        await handleUpdateStatus(booking.id, 'Completed');
                                                      }
                                                    }}
@@ -8543,9 +8635,11 @@ export default function App() {
     );
   };
 
-  const [showChat, setShowChat] = useState(false);
-  const [showFaqBot, setShowFaqBot] = useState(false);
-  const [chatMessages, setChatMessages] = useState<{sender: string, text: string, id?: number, tempId?: number, has_heart?: number}[]>([
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [chatTab, setChatTab] = useState<ChatTab>('assistant');
+  // Only counts as "read" while the guest is actually looking at the staff conversation.
+  const isStaffChatVisible = user?.role === 'guest' && isChatOpen && chatTab === 'staff';
+  const [chatMessages, setChatMessages] = useState<SupportChatMessage[]>([
     { sender: 'Admin', text: 'Welcome to Da Bali Resort! How can we help you today?' }
   ]);
   const [newMessage, setNewMessage] = useState('');
@@ -8575,7 +8669,7 @@ export default function App() {
   }, [user]);
 
   useEffect(() => {
-    if (showChat && user?.role === 'guest') {
+    if (isStaffChatVisible) {
       const markRead = async () => {
         try {
           const res = await fetch('/api/messages/guest/read', {
@@ -8592,7 +8686,7 @@ export default function App() {
       };
       markRead();
     }
-  }, [showChat, user, chatMessages]);
+  }, [isStaffChatVisible, user, chatMessages]);
 
   useEffect(() => {
     if (user?.role === 'guest') {
@@ -8967,7 +9061,7 @@ export default function App() {
             className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl p-6"
           >
             <h3 className="text-xl font-serif font-bold text-coffee-900 mb-2">{confirmDialog.title}</h3>
-            <p className="text-sm text-coffee-600 mb-6">{confirmDialog.message}</p>
+            <p className="text-sm text-coffee-600 mb-6 whitespace-pre-line">{confirmDialog.message}</p>
             <div className="flex gap-3">
               <button 
                 onClick={() => {
@@ -9591,28 +9685,22 @@ export default function App() {
         />
       )}
 
-      {user?.role === 'guest' && (
-        <ChatModal 
-          showChat={showChat}
-          setShowChat={setShowChat}
-          chatMessages={chatMessages}
-          newMessage={newMessage}
-          setNewMessage={setNewMessage}
-          handleSendMessage={handleSendMessage}
-          onDeleteMessage={handleDeleteGuestMessage}
-          unreadCount={guestUnreadCount}
-          onHeartClick={handleToggleHeart}
-        />
-      )}
-
-      {/* Guest-facing FAQ chatbot: shown to visitors and signed-in guests. Hidden while the
-          guest's Support Chat window is open since both live in the bottom-right corner. */}
-      {(!user || user.role === 'guest') && !showChat && (
-        <FaqChatbot
-          isOpen={showFaqBot}
-          onOpenChange={setShowFaqBot}
-          isGuest={user?.role === 'guest'}
-          onOpenSupportChat={() => { setShowFaqBot(false); setShowChat(true); }}
+      {/* Guest-facing chat: FAQ assistant for visitors and guests, plus staff support for guests. */}
+      {(!user || user.role === 'guest') && (
+        <ResortChatWidget
+          isOpen={isChatOpen}
+          onOpenChange={setIsChatOpen}
+          activeTab={chatTab}
+          onTabChange={setChatTab}
+          staffChat={user?.role === 'guest' ? {
+            messages: chatMessages,
+            draft: newMessage,
+            onDraftChange: setNewMessage,
+            onSend: handleSendMessage,
+            onDeleteMessage: handleDeleteGuestMessage,
+            onHeartClick: handleToggleHeart,
+            unreadCount: guestUnreadCount,
+          } : undefined}
         />
       )}
 
@@ -9945,12 +10033,14 @@ export default function App() {
         </div>
       )}
 
-      <FeedbackFormModal 
-        isOpen={showFeedbackModal} 
-        onClose={() => setShowFeedbackModal(false)} 
+      <FeedbackFormModal
+        booking={feedbackBooking}
+        onClose={closeFeedbackModal}
         onSubmit={handleSubmitFeedback}
         form={feedbackForm}
         setForm={setFeedbackForm}
+        isSubmitting={isSubmittingFeedback}
+        error={feedbackError}
       />
 
       {/* Banner Management Modal */}
