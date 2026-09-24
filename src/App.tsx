@@ -674,7 +674,7 @@ const Navbar = ({ user, onLogout, onNavigate, page }: { user: User | null, onLog
 };
 
 const Footer = ({ onNavigate }: { onNavigate: (page: string) => void }) => (
-  <footer id="contact" className="bg-[#5C3321] text-coffee-100 pt-20 pb-16 w-full border-t border-coffee-950/20 shadow-[-1px_-5px_15px_rgba(0,0,0,0.1)]">
+  <footer id="contact" className="mt-auto bg-[#5C3321] text-coffee-100 pt-20 pb-16 w-full border-t border-coffee-950/20 shadow-[-1px_-5px_15px_rgba(0,0,0,0.1)]">
     <div className="w-full max-w-[90rem] mx-auto px-4 sm:px-6 lg:px-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-10 lg:gap-14 items-start">
       <div className="flex flex-col items-start lg:col-span-4">
         <h3 className="text-2xl font-serif font-bold mb-4 text-white">Da Bali Resort</h3>
@@ -6252,8 +6252,8 @@ export default function App() {
           </div>
 
           {/* Content Scrollable Area */}
-          <div className={`flex-1 custom-scrollbar relative ${guestActiveTab === 'profile' ? 'p-3 lg:p-6 pt-4 lg:pt-8 overflow-hidden max-h-[90vh]' : 'p-4 lg:p-10 pt-8 lg:pt-16 overflow-y-auto'}`}>
-            <div className="max-w-5xl mx-auto w-full">
+          <div className={`flex-1 flex flex-col custom-scrollbar relative ${guestActiveTab === 'profile' ? 'p-3 lg:p-6 pt-4 lg:pt-8 overflow-hidden max-h-[90vh]' : 'p-4 lg:p-10 pt-8 lg:pt-16 overflow-y-auto'}`}>
+            <div className={`max-w-5xl mx-auto w-full flex-1 flex flex-col ${guestActiveTab === 'profile' ? 'min-h-0' : ''}`}>
               <AnimatePresence mode="wait">
                 {guestActiveTab === 'overview' && (
                   <motion.div
@@ -6261,7 +6261,7 @@ export default function App() {
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -20 }}
-                    className="w-full min-h-full flex flex-col gap-y-6"
+                    className="w-full flex-1 flex flex-col gap-y-6"
                   >
                     <div className="flex flex-col lg:flex-row justify-between items-start lg:items-end gap-4">
                       <div>
@@ -6494,7 +6494,7 @@ export default function App() {
                   initial={{ opacity: 0, x: 20 }}
                   animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: -20 }}
-                  className="w-full min-h-full flex flex-col gap-y-6 pt-4"
+                  className="w-full flex-1 flex flex-col gap-y-6 pt-4"
                 >
                   {/* Dismantled standalone card container to align with open layout of Admin Dashboard */}
                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 px-4 lg:px-0">
@@ -6821,7 +6821,7 @@ export default function App() {
                   initial={{ opacity: 0, scale: 0.95 }}
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.95 }}
-                  className="w-full max-h-[82vh] flex flex-col gap-y-4 overflow-hidden"
+                  className="w-full flex-1 min-h-0 flex flex-col gap-y-4 overflow-hidden"
                 >
                   <div className="bg-white rounded-2xl lg:rounded-[2.5rem] border border-[#A3402A] overflow-hidden shadow-xl flex flex-col max-w-3xl mx-auto w-full max-h-[72vh] h-auto">
                     <div className="bg-[#5C3321] p-4 lg:p-6 text-white relative overflow-hidden shrink-0">
@@ -7133,8 +7133,8 @@ export default function App() {
           </div>
 
           {/* Content Scrollable Area */}
-          <div className="flex-1 overflow-y-auto p-4 lg:p-10 custom-scrollbar relative">
-            <div className="w-full">
+          <div className="flex-1 flex flex-col overflow-y-auto p-4 lg:p-10 custom-scrollbar relative">
+            <div className="w-full flex-1 flex flex-col">
               {/* Welcome Greeting */}
               {adminActiveTab === 'overview' && (
                 <div className="max-w-5xl mx-auto w-full mb-8">
@@ -7143,7 +7143,7 @@ export default function App() {
                 </div>
               )}
 
-              <div className="">
+              <div className="flex-1 flex flex-col">
                 <AnimatePresence mode="wait">
                   {adminActiveTab === 'staff-records' && (
                     <motion.div
@@ -7151,7 +7151,7 @@ export default function App() {
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -10 }}
-                      className="w-full min-h-full flex flex-col gap-y-6"
+                      className="w-full flex-1 flex flex-col gap-y-6"
                     >
                       <div className="max-w-5xl mx-auto w-full">
                         <div className="mb-2">
@@ -7246,7 +7246,7 @@ export default function App() {
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -10 }}
-                      className="w-full min-h-full flex flex-col gap-y-6"
+                      className="w-full flex-1 flex flex-col gap-y-6"
                     >
                       <div className="max-w-6xl mx-auto w-full">
                         <div className="mb-2">
@@ -7267,7 +7267,7 @@ export default function App() {
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -10 }}
-                      className="w-full min-h-full flex flex-col gap-y-6"
+                      className="w-full flex-1 flex flex-col gap-y-6"
                     >
                       <div className="max-w-7xl mx-auto w-full">
                         <div className="mb-2">
@@ -7290,7 +7290,7 @@ export default function App() {
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -10 }}
-                      className="w-full min-h-full flex flex-col gap-y-6"
+                      className="w-full flex-1 flex flex-col gap-y-6"
                     >
                       <div className="max-w-7xl mx-auto w-full">
                         <div className="mb-2">
@@ -7309,7 +7309,7 @@ export default function App() {
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -10 }}
-                      className="w-full min-h-full flex flex-col gap-y-6"
+                      className="w-full flex-1 flex flex-col gap-y-6"
                     >
                       <div className="max-w-7xl mx-auto w-full">
                         <div className="mb-2">
@@ -7328,7 +7328,7 @@ export default function App() {
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -10 }}
-                      className="w-full min-h-full flex flex-col gap-y-6"
+                      className="w-full flex-1 flex flex-col gap-y-6"
                     >
                       <div className="max-w-7xl mx-auto w-full">
                         <div className="mb-2">
@@ -7347,7 +7347,7 @@ export default function App() {
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -10 }}
-                      className="w-full min-h-full flex flex-col gap-y-8"
+                      className="w-full flex-1 flex flex-col gap-y-8"
                     >
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6">
                     {[
@@ -7463,7 +7463,7 @@ export default function App() {
                       initial={{ opacity: 0, x: 20 }}
                       animate={{ opacity: 1, x: 0 }}
                       exit={{ opacity: 0, x: -20 }}
-                      className="w-full min-h-full flex flex-col gap-y-8"
+                      className="w-full flex-1 flex flex-col gap-y-8"
                     >
                       <div className="bg-white rounded-2xl lg:rounded-[2.5rem] border border-[#A3402A] overflow-hidden shadow-xl flex-grow flex flex-col">
                         <div className="bg-[#5C3321] p-4 lg:p-6 text-white">
@@ -7578,7 +7578,7 @@ export default function App() {
                   initial={{ opacity: 0, x: 20 }}
                   animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: -20 }}
-                  className="w-full min-h-full flex flex-col gap-y-8"
+                  className="w-full flex-1 flex flex-col gap-y-8"
                 >
                   <div className="space-y-8 flex-grow flex flex-col pt-4">
                     <div className="px-4 lg:px-0">
@@ -8084,7 +8084,7 @@ export default function App() {
                   initial={{ opacity: 0, x: 20 }}
                   animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: -20 }}
-                  className="w-full min-h-full flex flex-col gap-y-8"
+                  className="w-full flex-1 flex flex-col gap-y-8"
                 >
                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
                     <div className="flex flex-col gap-1">
@@ -8170,7 +8170,7 @@ export default function App() {
                   initial={{ opacity: 0, x: 20 }}
                   animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: -20 }}
-                  className="w-full min-h-full flex flex-col gap-y-8"
+                  className="w-full flex-1 flex flex-col gap-y-8"
                 >
                   <div className="flex justify-between items-center">
                     <h3 className="text-xl font-bold text-coffee-900">Room Management</h3>
@@ -8276,7 +8276,7 @@ export default function App() {
                   initial={{ opacity: 0, x: 20 }}
                   animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: -20 }}
-                  className="w-full min-h-full flex flex-col gap-y-8"
+                  className="w-full flex-1 flex flex-col gap-y-8"
                 >
                   <div className="flex justify-between items-center">
                     <h3 className="text-xl font-bold text-coffee-900">Amenity Management</h3>
@@ -8397,7 +8397,7 @@ export default function App() {
                   initial={{ opacity: 0, x: 20 }}
                   animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: -20 }}
-                  className="h-full flex flex-col pb-8 pt-4 lg:pt-0"
+                  className="flex-1 flex flex-col pb-8 pt-4 lg:pt-0"
                 >
                   <div className="flex justify-between items-end mb-6 shrink-0">
                     <div>
@@ -9142,7 +9142,7 @@ export default function App() {
         }} 
       />
       
-      <main className={`flex-grow flex flex-col ${page === 'admin-dashboard' || page === 'guest-dashboard' ? 'h-[calc(100vh-64px)] overflow-hidden' : ''}`}>
+      <main className={`grow flex flex-col ${page === 'admin-dashboard' || page === 'guest-dashboard' ? 'h-[calc(100vh-64px)] overflow-hidden' : ''}`}>
         <AnimatePresence mode="wait">
           <motion.div
             key={page}
