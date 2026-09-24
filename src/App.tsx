@@ -3167,8 +3167,12 @@ export default function App() {
   const [showArchivedRooms, setShowArchivedRooms] = useState(false);
   const [roomFilter, setRoomFilter] = useState('All');
   const [newBookingTab, setNewBookingTab] = useState<'rooms' | 'amenities'>('rooms');
+  const [isFromHero, setIsFromHero] = useState(false);
   useEffect(() => {
-    if (page !== 'rooms') setNewBookingTab('rooms');
+    if (page !== 'rooms') {
+      setNewBookingTab('rooms');
+      setIsFromHero(false);
+    }
   }, [page]);
   const [amenities, setAmenities] = useState<Amenity[]>([]);
   const [amenitySearch, setAmenitySearch] = useState('');
@@ -5184,7 +5188,12 @@ export default function App() {
   const renderHome = () => (
     <div className="pb-20">
       <Hero 
-        onBookNow={() => setPage('rooms')} 
+        onBookNow={() => {
+          setNewBookingTab('rooms');
+          setIsFromHero(true);
+          setPage('rooms');
+          window.scrollTo(0, 0);
+        }}
         heroBanners={heroBanners} 
         currentSlide={currentSlide} 
         setCurrentSlide={setCurrentSlide}
@@ -5361,7 +5370,8 @@ export default function App() {
     const bookableRooms = rooms.filter(r => r.status !== 'inactive');
     const salakotRooms = bookableRooms.filter(r => r.name.includes('Salakot'));
     const bubuRooms = bookableRooms.filter(r => r.name.includes('Bubu'));
-    const showAmenities = isFromDashboard && newBookingTab === 'amenities';
+    const showBookingTabs = isFromDashboard || isFromHero;
+    const showAmenities = showBookingTabs && newBookingTab === 'amenities';
 
     return (
       <div className="max-w-7xl mx-auto px-4 py-16 space-y-20">
@@ -5372,6 +5382,9 @@ export default function App() {
                 setPage('guest-dashboard');
                 setIsFromDashboard(false);
                 window.location.hash = '#dashboard-rooms-section';
+              } else if (isFromHero) {
+                setPage('home');
+                window.scrollTo(0, 0);
               } else {
                 setPage('home');
                 setTimeout(() => {
@@ -5393,7 +5406,7 @@ export default function App() {
             <div className="p-2 bg-white rounded-full shadow-md group-hover:bg-coffee-50 transition-all">
               <ChevronLeft size={20} />
             </div>
-            <span className="font-bold">{isFromDashboard ? 'Back to Dashboard' : 'Back to Accommodations'}</span>
+            <span className="font-bold">{isFromDashboard ? 'Back to Dashboard' : isFromHero ? 'Back to Home' : 'Back to Accommodations'}</span>
           </button>
           {!showAmenities && (
             <select
@@ -5407,7 +5420,7 @@ export default function App() {
             </select>
           )}
         </div>
-        {isFromDashboard && (
+        {showBookingTabs && (
           <div className="text-center -mt-8">
             <h2 className="text-3xl font-serif font-bold text-coffee-900 mb-2">What would you like to book?</h2>
             <p className="text-coffee-600 mb-6">Reserve a room for your stay or book one of our amenities.</p>
