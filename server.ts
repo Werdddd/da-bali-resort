@@ -901,10 +901,6 @@ async function startServer() {
     }
   });
 
-  app.get("/api/debug/logs", (req, res) => {
-    res.json({ logs: debugLogs });
-  });
-
   // Middleware to check if user is admin
   const isAdmin = (req: express.Request, res: express.Response, next: express.NextFunction) => {
     try {
@@ -913,15 +909,9 @@ async function startServer() {
                            req.headers.accept?.includes('application/json') ||
                            req.headers['content-type']?.includes('application/json');
       
-      // Check session first, then fallback to headers (for iframe preview environments)
-      const sessionUserId = (req.session as any)?.userId;
-      const sessionUserRole = (req.session as any)?.userRole;
-      
-      const headerUserId = req.headers['x-user-id'];
-      const headerUserRole = req.headers['x-user-role'];
-      
-      const userId = sessionUserId || headerUserId;
-      const userRole = sessionUserRole || headerUserRole;
+      // Identity comes from the server-side session only; client-supplied headers are never trusted
+      const userId = (req.session as any)?.userId;
+      const userRole = (req.session as any)?.userRole;
       
       if (userId && userRole === 'admin') {
         (req as any).adminId = userId;
@@ -953,15 +943,9 @@ async function startServer() {
                            req.headers.accept?.includes('application/json') ||
                            req.headers['content-type']?.includes('application/json');
 
-      // Check session first, then fallback to headers (for iframe preview environments)
-      const sessionUserId = (req.session as any)?.userId;
-      const sessionUserRole = (req.session as any)?.userRole;
-
-      const headerUserId = req.headers['x-user-id'];
-      const headerUserRole = req.headers['x-user-role'];
-
-      const userId = sessionUserId || headerUserId;
-      const userRole = sessionUserRole || headerUserRole;
+      // Identity comes from the server-side session only; client-supplied headers are never trusted
+      const userId = (req.session as any)?.userId;
+      const userRole = (req.session as any)?.userRole;
 
       if (userId && (userRole === 'admin' || userRole === 'staff')) {
         (req as any).adminId = userId;
@@ -995,14 +979,8 @@ async function startServer() {
                            req.headers.accept?.includes('application/json') ||
                            req.headers['content-type']?.includes('application/json');
 
-      const sessionUserId = (req.session as any)?.userId;
-      const sessionUserRole = (req.session as any)?.userRole;
-
-      const headerUserId = req.headers['x-user-id'];
-      const headerUserRole = req.headers['x-user-role'];
-
-      const userId = sessionUserId || headerUserId;
-      const userRole = sessionUserRole || headerUserRole;
+      const userId = (req.session as any)?.userId;
+      const userRole = (req.session as any)?.userRole;
 
       if (userId && (userRole === 'admin' || userRole === 'staff' || userRole === 'housekeeping')) {
         (req as any).adminId = userId;
@@ -1025,18 +1003,81 @@ async function startServer() {
     }
   };
 
-  // Resolves the caller's identity from session (normal browser auth) or x-user-id/
-  // x-user-role headers (fallback used elsewhere in this file for iframe preview
-  // environments where the session cookie doesn't reliably reach the server).
+  // Resolves the caller's identity from the server-side session. Client-supplied
+  // x-user-id / x-user-role headers are deliberately ignored - trusting them would let
+  // anyone claim any user or role (privilege escalation).
   const getAuthContext = (req: express.Request) => {
-    const sessionUserId = (req.session as any)?.userId;
-    const sessionUserRole = (req.session as any)?.userRole;
-    const headerUserId = req.headers['x-user-id'];
-    const headerUserRole = req.headers['x-user-role'];
-    const userId = sessionUserId || headerUserId;
-    const userRole = sessionUserRole || headerUserRole;
+    const userId = (req.session as any)?.userId;
+    const userRole = (req.session as any)?.userRole;
     return { userId, userRole, isStaff: userRole === 'admin' || userRole === 'staff' };
   };
+
+  app.get("/api/debug/logs", isAdmin, (req, res) => {
+    res.json({ logs: debugLogs });
+  });
+
+  // Fixed-window, in-memory rate limiter for the auth endpoints (brute-force / reset-spam
+  // protection). State is per-process, which is fine for this single-instance server.
+  // Call limiter.reset(req) after a successful attempt so only failures accumulate.
+  const createRateLimiter = (opts: {
+    windowMs: number;
+    max: number;
+    key: (req: express.Request) => string;
+    message: string;
+  }) => {
+    const hits = new Map<string, { count: number; resetAt: number }>();
+    setInterval(() => {
+      const now = Date.now();
+      for (const [k, v] of hits) if (v.resetAt <= now) hits.delete(k);
+    }, opts.windowMs).unref();
+
+    const middleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+      const k = opts.key(req);
+      const now = Date.now();
+      let entry = hits.get(k);
+      if (!entry || entry.resetAt <= now) {
+        entry = { count: 0, resetAt: now + opts.windowMs };
+        hits.set(k, entry);
+      }
+      entry.count++;
+      if (entry.count > opts.max) {
+        const retryAfterSec = Math.ceil((entry.resetAt - now) / 1000);
+        res.setHeader('Retry-After', String(retryAfterSec));
+        console.warn(`[RateLimit] Blocked ${req.method} ${req.originalUrl} for key ${k}`);
+        return res.status(429).json({ error: opts.message, retryAfter: retryAfterSec });
+      }
+      next();
+    };
+    return Object.assign(middleware, { reset: (req: express.Request) => hits.delete(opts.key(req)) });
+  };
+
+  const clientIp = (req: express.Request) => req.ip || req.socket.remoteAddress || 'unknown';
+
+  // Per account+IP: 5 failed logins per 15 min. Per IP: 30 attempts per 15 min across accounts.
+  const loginAccountLimiter = createRateLimiter({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    key: (req) => `login:${clientIp(req)}:${String(req.body?.username || '').trim().toLowerCase()}`,
+    message: "Too many failed login attempts. Please wait 15 minutes and try again."
+  });
+  const loginIpLimiter = createRateLimiter({
+    windowMs: 15 * 60 * 1000,
+    max: 30,
+    key: (req) => `login-ip:${clientIp(req)}`,
+    message: "Too many login attempts from this device. Please try again later."
+  });
+  const forgotPasswordLimiter = createRateLimiter({
+    windowMs: 60 * 60 * 1000,
+    max: 5,
+    key: (req) => `forgot:${clientIp(req)}`,
+    message: "Too many password reset requests. Please try again in an hour."
+  });
+  const resetPasswordLimiter = createRateLimiter({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    key: (req) => `reset:${clientIp(req)}`,
+    message: "Too many password reset attempts. Please try again later."
+  });
 
   // Records an Admin/Staff action for the Audit Logs viewer (booking status changes,
   // payment verification, staff/room/amenity edits, etc). The actor's display name is
@@ -1111,12 +1152,13 @@ async function startServer() {
     }
   });
 
-  app.post("/api/auth/login", (req, res) => {
+  app.post("/api/auth/login", loginIpLimiter, loginAccountLimiter, (req, res) => {
     try {
       const { username, password } = req.body;
       const user = db.prepare("SELECT * FROM users WHERE username = ? OR email = ?").get(username, username) as any;
       if (user && bcrypt.compareSync(password, user.password)) {
         const { password: _, ...userWithoutPassword } = user;
+        loginAccountLimiter.reset(req);
         req.session.userId = user.id;
         req.session.userRole = user.role;
         req.session.save((err) => {
@@ -1135,25 +1177,6 @@ async function startServer() {
     }
   });
 
-  app.get("/api/debug/list-users", isAdmin, (req, res) => {
-    const users = db.prepare("SELECT username, id FROM users").all();
-    res.json(users);
-  });
-  
-  app.post("/api/debug/reset-jils", isAdmin, (req, res) => {
-    try {
-      const user = db.prepare("SELECT id FROM users WHERE lower(username) LIKE ? OR lower(first_name) LIKE ?").get('%jils%', '%jils%') as any;
-      if (!user) {
-        return res.status(404).json({ error: "User 'Jils' not found" });
-      }
-      const userId = user.id;
-      db.prepare("DELETE FROM messages WHERE sender_id = ? OR receiver_id = ?").run(userId, userId);
-      res.json({ success: true, message: `History cleared for Jils (ID: ${userId})` });
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
   app.post("/api/auth/logout", (req, res) => {
     try {
       req.session.destroy((err) => {
@@ -1169,7 +1192,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/auth/forgot-password", async (req, res) => {
+  app.post("/api/auth/forgot-password", forgotPasswordLimiter, async (req, res) => {
     const { email } = req.body;
     try {
       const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email) as any;
@@ -1199,7 +1222,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/auth/reset-password", async (req, res) => {
+  app.post("/api/auth/reset-password", resetPasswordLimiter, async (req, res) => {
     const { token, newPassword } = req.body;
     try {
       const user = db.prepare("SELECT * FROM users WHERE reset_token = ? AND reset_token_expiry > ?")
@@ -2075,12 +2098,7 @@ async function startServer() {
 
       if (!booking) return res.status(404).json({ error: "Booking not found" });
 
-      const sessionUserId = (req.session as any)?.userId;
-      const sessionUserRole = (req.session as any)?.userRole;
-      const headerUserId = req.headers['x-user-id'];
-      const headerUserRole = req.headers['x-user-role'];
-      const userId = sessionUserId || headerUserId;
-      const userRole = sessionUserRole || headerUserRole;
+      const { userId, userRole } = getAuthContext(req);
 
       const isOwner = userId && String(userId) === String(booking.user_id);
       const isStaff = userRole === 'admin' || userRole === 'staff';
@@ -2122,7 +2140,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/bookings/walk-in", (req, res) => {
+  app.post("/api/bookings/walk-in", isStaffOrAdmin, (req, res) => {
     try {
       const { roomId, checkIn, checkOut, totalPrice, guestsCount, extraBed, firstName, lastName, email, contactNo } = req.body;
 
@@ -3136,9 +3154,7 @@ async function startServer() {
     try {
       const messageId = parseInt(req.params.id);
       const sessionUserId = req.session.userId;
-      const headerUserId = req.headers['x-user-id'];
-      const userIdStr = sessionUserId || headerUserId;
-      const userId = userIdStr ? parseInt(userIdStr as string, 10) : null;
+      const userId = sessionUserId ? parseInt(String(sessionUserId), 10) : null;
       
       if (!userId) {
         return res.status(401).json({ error: "Unauthorized" });
@@ -3231,9 +3247,7 @@ async function startServer() {
     try {
       const messageId = parseInt(req.params.id);
       const sessionUserId = req.session.userId;
-      const headerUserId = req.headers['x-user-id'];
-      const userIdStr = sessionUserId || headerUserId;
-      const userId = userIdStr ? parseInt(userIdStr as string, 10) : null;
+      const userId = sessionUserId ? parseInt(String(sessionUserId), 10) : null;
       
       if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
@@ -3251,9 +3265,7 @@ async function startServer() {
   app.get("/api/messages/guest/unread", (req, res) => {
     try {
       const sessionUserId = req.session.userId;
-      const headerUserId = req.headers['x-user-id'];
-      const userIdStr = sessionUserId || headerUserId;
-      const userId = userIdStr ? parseInt(userIdStr as string, 10) : null;
+      const userId = sessionUserId ? parseInt(String(sessionUserId), 10) : null;
       
       if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
@@ -3274,9 +3286,7 @@ async function startServer() {
   app.patch("/api/messages/guest/read", (req, res) => {
     try {
       const sessionUserId = req.session.userId;
-      const headerUserId = req.headers['x-user-id'];
-      const userIdStr = sessionUserId || headerUserId;
-      const userId = userIdStr ? parseInt(userIdStr as string, 10) : null;
+      const userId = sessionUserId ? parseInt(String(sessionUserId), 10) : null;
       
       if (!userId) return res.status(401).json({ error: "Unauthorized" });
 

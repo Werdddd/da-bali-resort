@@ -4410,6 +4410,11 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: forgotPasswordEmail })
       });
+      if (res.status === 429) {
+        const data = await res.json().catch(() => ({}));
+        setForgotPasswordMessage({ type: 'error', text: data.error || 'Too many requests. Please try again later.' });
+        return;
+      }
       // Always show success for security
       setForgotPasswordMessage({ type: 'success', text: 'If this email is registered, you will receive a link shortly.' });
     } catch (error) {
