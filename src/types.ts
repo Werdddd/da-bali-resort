@@ -227,3 +227,31 @@ export interface HeroBanner {
   order_index: number;
   created_at: string;
 }
+
+export interface FaqEntry {
+  id: number;
+  question: string;
+  answer: string;
+  keywords: string;
+  category: string;
+  is_active: number;
+  order_index: number;
+  hit_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FaqUnmatchedQuery {
+  id: number;
+  query: string;
+  user_id: number | null;
+  created_at: string;
+}
+
+export interface FaqChatResponse {
+  matched: boolean;
+  answer: string | null;
+  faqId: number | null;
+  question: string | null;
+  suggestions: { id: number; question: string }[];
+}

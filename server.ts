@@ -550,7 +550,54 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC);
+
+  -- FAQ Chatbot Data: each row is one query template (question) with the key phrases
+  -- that trigger it and the canned response the rule-based chatbot replies with.
+  CREATE TABLE IF NOT EXISTS faq_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    keywords TEXT NOT NULL DEFAULT '',
+    category TEXT DEFAULT 'General',
+    is_active INTEGER DEFAULT 1,
+    order_index INTEGER DEFAULT 0,
+    hit_count INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  -- Guest questions the chatbot couldn't match, so admins can see which FAQs are missing.
+  CREATE TABLE IF NOT EXISTS faq_unmatched_queries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    query TEXT NOT NULL,
+    user_id INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
 `);
+
+// Seed FAQ Chatbot entries if empty (only once, so admin edits are never overwritten)
+const faqCount = db.prepare("SELECT COUNT(*) as count FROM faq_entries").get() as { count: number };
+if (faqCount.count === 0) {
+  const insertFaq = db.prepare("INSERT INTO faq_entries (question, answer, keywords, category, order_index) VALUES (?, ?, ?, ?, ?)");
+  const faqsToSeed: [string, string, string, string][] = [
+    ["Hello!", "Hello and welcome to Da Bali Resort! 🌴 I'm the resort's FAQ assistant. Ask me about check-in times, rooms, rates, payments, amenities, or how to book.", "hi, hello, hey, good morning, good afternoon, good evening, kumusta, greetings", "General"],
+    ["What time is check-in and check-out?", "Check-in starts at 2:00 PM and check-out is at 12:00 PM (noon). If you need a late check-out, please message our staff and we'll do our best to accommodate you.", "check in, check out, checkin, checkout, arrival time, departure time, late check out, early check in", "Stay"],
+    ["How do I book a room?", "To book, sign in with a guest account, open Accommodations, choose your room and dates, then submit your reservation and upload your proof of payment. Your booking is confirmed once our staff verifies the payment.", "book, booking, reserve, reservation, how to book, make a reservation, room availability, available rooms, available dates", "Booking"],
+    ["Do I need an account to book?", "Yes. Reservations can only be made with a guest account. You can sign up for free using the Sign In button at the top of the page.", "account, sign up, signup, register, registration, login, log in, sign in, password", "Booking"],
+    ["What payment methods do you accept?", "We accept GCash and BPI bank transfer. GCash: 09629724075 (Da Bali Resort). After paying, upload your proof of payment on the booking form so our staff can verify it.", "payment, pay, gcash, bpi, bank, bank transfer, payment method, mode of payment, how to pay, where to pay", "Payment"],
+    ["How much is the downpayment?", "Room bookings and most amenities require a 50% downpayment to reserve. The Infinity Pool requires full payment. The remaining balance can be paid from your guest dashboard or settled with our front desk.", "downpayment, down payment, deposit, 50, partial payment, balance, full payment, remaining balance", "Payment"],
+    ["How long does payment verification take?", "After you upload your proof of payment, your booking shows as \"Pending Verification\" until our staff reviews it. Once verified, you'll be notified and a check-in QR code will appear in your dashboard.", "verify, verification, verified, pending, proof of payment, receipt, confirmed, confirmation, qr code, payment status, booking status", "Payment"],
+    ["What rooms do you offer and how much are they?", "We offer Salakot Rooms (Standard, ₱3,000/night, good for 2 guests) and Bubu Family Suites (₱6,950/night, up to 8 guests, breakfast included). See the Accommodations page for live rates and availability.", "room, rooms, rate, rates, price, prices, room rate, room price, accommodation, accommodations, salakot, bubu, suite, family suite, per night", "Rooms"],
+    ["Can I add an extra bed or extra guests?", "Salakot Rooms are good for 2 guests, with 1 extra bed available on request (max 3 guests). Bubu Family Suites fit up to 8 guests. You can request an extra bed while booking.", "extra bed, additional bed, extra person, extra guest, additional guest, capacity, max guests, how many guests, pax", "Rooms"],
+    ["What amenities are available?", "Our amenities include the Infinity Pool, Fine Dining (with Kape Rosario coffee), the Pavilion function room, and the Colored Tent for team building. Open the Amenities page for details and to book.", "amenities, amenity, facilities, pool, swimming, infinity pool, pavilion, tent, colored tent, team building, dining, restaurant, food, coffee, event, venue", "Amenities"],
+    ["How much is the pool entrance fee?", "Infinity Pool entrance is ₱90 for adults and ₱60 for children 5 years old and below. Cottages are available: Large Tent ₱2,500 (20 pax), Gray Tent ₱2,000 (15 pax), and Umbrella ₱500 (8 pax).", "entrance fee, pool entrance, entrance, pool fee, swimming fee, cottage, cottages, day tour, walk in", "Amenities"],
+    ["Can I cancel or reschedule my booking?", "You can cancel a booking that's still pending from your guest dashboard. For confirmed bookings, refunds, or date changes, please message our staff through Support Chat or call 09629724075.", "cancel, cancellation, refund, reschedule, rebook, change date, change booking, move date", "Booking"],
+    ["Where is the resort located?", "Da Bali Resort is in Rosario, Balingasag, Misamis Oriental. You'll find a map in the Find Us section at the bottom of the page.", "where, location, located, address, directions, map, how to get there, how to go", "General"],
+    ["How can I contact the resort?", "You can reach us at 09629724075 or dermagrace56@yahoo.com.ph. Signed-in guests can also message our staff directly through Support Chat.", "contact, phone, number, email, call, talk to staff, staff, human, agent, person, support", "General"],
+    ["Thank you!", "You're welcome! Enjoy your stay at Da Bali Resort. 🌺", "thank you, thanks, salamat, ty, thank", "General"],
+  ];
+  faqsToSeed.forEach(([question, answer, keywords, category], i) => insertFaq.run(question, answer, keywords, category, i));
+}
 
 // Seed Rooms if empty
 const roomCount = db.prepare("SELECT COUNT(*) as count FROM rooms").get() as { count: number };
@@ -3335,6 +3382,235 @@ async function startServer() {
     } catch (e) {
       console.error("GET /api/audit-logs failed:", e);
       res.status(500).json({ error: "Failed to fetch audit logs" });
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // FAQ Chatbot: rule-based module that matches a guest's message against the
+  // key phrases and query templates in faq_entries and replies with the canned
+  // answer. No external AI - every response is one an admin configured.
+  // ---------------------------------------------------------------------------
+  const FAQ_STOPWORDS = new Set([
+    'a', 'an', 'the', 'is', 'are', 'am', 'was', 'be', 'do', 'does', 'did', 'i', 'me', 'my', 'we', 'our', 'you', 'your',
+    'it', 'its', 'to', 'of', 'in', 'on', 'at', 'for', 'and', 'or', 'can', 'could', 'would', 'will', 'what', 'how', 'much',
+    'when', 'which', 'who', 'there', 'this', 'that', 'with', 'about', 'please', 'po', 'ba', 'ang', 'ng', 'sa', 'have', 'has',
+  ]);
+  const FAQ_MATCH_THRESHOLD = 0.75;
+
+  // Lowercases, turns hyphens/punctuation into spaces ("check-in" -> "check in") and
+  // strips a trailing plural "s" so "rooms" matches the key phrase "room".
+  const faqTokenize = (text: string) =>
+    text.toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(t => (!FAQ_STOPWORDS.has(t) && t.length > 3 && t.endsWith('s') && !t.endsWith('ss') ? t.slice(0, -1) : t));
+
+  // True when a and b differ by at most one insert/delete/substitution (typo tolerance).
+  const faqWithinOneEdit = (a: string, b: string) => {
+    if (Math.abs(a.length - b.length) > 1) return false;
+    let i = 0, j = 0, edits = 0;
+    while (i < a.length && j < b.length) {
+      if (a[i] === b[j]) { i++; j++; continue; }
+      if (++edits > 1) return false;
+      if (a.length > b.length) i++;
+      else if (b.length > a.length) j++;
+      else { i++; j++; }
+    }
+    return edits + (a.length - i) + (b.length - j) <= 1;
+  };
+
+  // Scores an FAQ against the query: each key phrase found scores its word count (so
+  // "check in" outweighs "in"), long single words also match with a one-letter typo, and
+  // each remaining meaningful query word that also appears in the question template adds
+  // 0.5. Words already matched by a key phrase aren't counted twice, so a greeting like
+  // "hello, what time is checkout?" goes to the check-out answer, not the "Hello!" entry.
+  const scoreFaq = (queryTokens: string[], faq: { question: string; keywords: string }) => {
+    const padded = ` ${queryTokens.join(' ')} `;
+    const phrases = new Set((faq.keywords || '').split(',').map(k => faqTokenize(k).join(' ')).filter(Boolean));
+    const covered = new Set<string>();
+    let score = 0;
+    phrases.forEach(phrase => {
+      const phraseTokens = phrase.split(' ');
+      if (padded.includes(` ${phrase} `)) {
+        score += phraseTokens.length;
+        phraseTokens.forEach(t => covered.add(t));
+      } else if (phraseTokens.length === 1 && phrase.length >= 5) {
+        const typo = queryTokens.find(t => t.length >= 4 && !covered.has(t) && faqWithinOneEdit(t, phrase));
+        if (typo) {
+          score += 0.75;
+          covered.add(typo);
+        }
+      }
+    });
+    const templateTokens = new Set(faqTokenize(faq.question).filter(t => !FAQ_STOPWORDS.has(t)));
+    new Set(queryTokens).forEach(t => {
+      if (!FAQ_STOPWORDS.has(t) && !covered.has(t) && templateTokens.has(t)) score += 0.5;
+    });
+    return score;
+  };
+
+  // Public: active FAQ questions, used for the chatbot's suggestion chips.
+  app.get("/api/faq", (req, res) => {
+    try {
+      const faqs = db.prepare(`
+        SELECT id, question, category FROM faq_entries
+        WHERE is_active = 1
+        ORDER BY order_index ASC, id ASC
+      `).all();
+      res.json(faqs);
+    } catch (e) {
+      console.error("GET /api/faq failed:", e);
+      res.status(500).json({ error: "Failed to fetch FAQs" });
+    }
+  });
+
+  // Public: process a guest inquiry. Pass { message } for free text, or { faqId } when the
+  // guest taps a suggested question. { preview: true } (admin tester) skips hit counting
+  // and unmatched logging so testing doesn't skew the stats.
+  app.post("/api/faq/chat", (req, res) => {
+    try {
+      const { message, faqId, preview } = req.body || {};
+      const activeFaqs = db.prepare("SELECT id, question, answer, keywords, category FROM faq_entries WHERE is_active = 1 ORDER BY order_index ASC, id ASC").all() as { id: number; question: string; answer: string; keywords: string; category: string }[];
+
+      let best: { id: number; question: string; answer: string } | undefined;
+      let suggestions: { id: number; question: string }[] = [];
+
+      if (faqId) {
+        best = activeFaqs.find(f => f.id === Number(faqId));
+      } else {
+        const text = String(message || '').slice(0, 500).trim();
+        if (!text) return res.status(400).json({ error: "Message is required" });
+
+        const queryTokens = faqTokenize(text);
+        const ranked = activeFaqs
+          .map(f => ({ faq: f, score: scoreFaq(queryTokens, f) }))
+          .filter(r => r.score > 0)
+          .sort((a, b) => b.score - a.score);
+
+        if (ranked.length && ranked[0].score >= FAQ_MATCH_THRESHOLD) {
+          best = ranked[0].faq;
+          suggestions = ranked.slice(1, 4).map(r => ({ id: r.faq.id, question: r.faq.question }));
+        } else {
+          suggestions = ranked.slice(0, 3).map(r => ({ id: r.faq.id, question: r.faq.question }));
+          if (!preview) {
+            const { userId } = getAuthContext(req);
+            db.prepare("INSERT INTO faq_unmatched_queries (query, user_id) VALUES (?, ?)").run(text, userId || null);
+          }
+        }
+      }
+
+      if (!best) {
+        if (!suggestions.length) {
+          // Nothing related at all - offer the main topics (skipping greeting/thanks-style entries).
+          suggestions = activeFaqs.filter(f => f.category !== 'General').slice(0, 4).map(f => ({ id: f.id, question: f.question }));
+        }
+        return res.json({ matched: false, answer: null, faqId: null, question: null, suggestions });
+      }
+
+      if (!preview) {
+        db.prepare("UPDATE faq_entries SET hit_count = hit_count + 1 WHERE id = ?").run(best.id);
+      }
+      res.json({ matched: true, answer: best.answer, faqId: best.id, question: best.question, suggestions });
+    } catch (e) {
+      console.error("POST /api/faq/chat failed:", e);
+      res.status(500).json({ error: "Failed to process inquiry" });
+    }
+  });
+
+  // Admin: full FAQ data including inactive entries and hit counts.
+  app.get("/api/faq/admin", isAdmin, (req, res) => {
+    try {
+      const faqs = db.prepare("SELECT * FROM faq_entries ORDER BY order_index ASC, id ASC").all();
+      res.json(faqs);
+    } catch (e) {
+      console.error("GET /api/faq/admin failed:", e);
+      res.status(500).json({ error: "Failed to fetch FAQs" });
+    }
+  });
+
+  const normalizeFaqKeywords = (keywords: unknown) =>
+    String(keywords || '')
+      .split(',')
+      .map(k => k.trim().toLowerCase())
+      .filter(Boolean)
+      .join(', ');
+
+  app.post("/api/faq", isAdmin, (req, res) => {
+    const { question, answer, keywords, category, is_active, order_index } = req.body;
+    if (!question?.trim() || !answer?.trim()) {
+      return res.status(400).json({ error: "Question and answer are required." });
+    }
+    try {
+      const info = db.prepare(`
+        INSERT INTO faq_entries (question, answer, keywords, category, is_active, order_index)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(question.trim(), answer.trim(), normalizeFaqKeywords(keywords), category?.trim() || 'General', is_active === false || is_active === 0 ? 0 : 1, Number(order_index) || 0);
+      const faq = db.prepare("SELECT * FROM faq_entries WHERE id = ?").get(info.lastInsertRowid);
+      logAuditAction(req, 'faq_created', 'faq', info.lastInsertRowid as number, question.trim());
+      res.json(faq);
+    } catch (e) {
+      console.error("POST /api/faq failed:", e);
+      res.status(500).json({ error: "Failed to create FAQ" });
+    }
+  });
+
+  app.put("/api/faq/:id", isAdmin, (req, res) => {
+    const { id } = req.params;
+    const { question, answer, keywords, category, is_active, order_index } = req.body;
+    if (!question?.trim() || !answer?.trim()) {
+      return res.status(400).json({ error: "Question and answer are required." });
+    }
+    try {
+      const result = db.prepare(`
+        UPDATE faq_entries
+        SET question = ?, answer = ?, keywords = ?, category = ?, is_active = ?, order_index = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(question.trim(), answer.trim(), normalizeFaqKeywords(keywords), category?.trim() || 'General', is_active === false || is_active === 0 ? 0 : 1, Number(order_index) || 0, id);
+      if (result.changes === 0) {
+        return res.status(404).json({ error: "FAQ not found." });
+      }
+      logAuditAction(req, 'faq_updated', 'faq', id, question.trim(), { active: is_active === false || is_active === 0 ? 'no' : 'yes' });
+      res.json(db.prepare("SELECT * FROM faq_entries WHERE id = ?").get(id));
+    } catch (e) {
+      console.error("PUT /api/faq/:id failed:", e);
+      res.status(500).json({ error: "Failed to update FAQ" });
+    }
+  });
+
+  app.delete("/api/faq/:id", isAdmin, (req, res) => {
+    const { id } = req.params;
+    try {
+      const existing = db.prepare("SELECT question FROM faq_entries WHERE id = ?").get(id) as { question: string } | undefined;
+      const result = db.prepare("DELETE FROM faq_entries WHERE id = ?").run(id);
+      if (result.changes === 0) {
+        return res.status(404).json({ error: "FAQ not found." });
+      }
+      logAuditAction(req, 'faq_deleted', 'faq', id, existing?.question || null);
+      res.json({ success: true });
+    } catch (e) {
+      console.error("DELETE /api/faq/:id failed:", e);
+      res.status(500).json({ error: "Failed to delete FAQ" });
+    }
+  });
+
+  app.get("/api/faq/unmatched", isAdmin, (req, res) => {
+    try {
+      const queries = db.prepare("SELECT * FROM faq_unmatched_queries ORDER BY created_at DESC, id DESC LIMIT 200").all();
+      res.json(queries);
+    } catch (e) {
+      console.error("GET /api/faq/unmatched failed:", e);
+      res.status(500).json({ error: "Failed to fetch unmatched queries" });
+    }
+  });
+
+  app.delete("/api/faq/unmatched/:id", isAdmin, (req, res) => {
+    try {
+      db.prepare("DELETE FROM faq_unmatched_queries WHERE id = ?").run(req.params.id);
+      res.json({ success: true });
+    } catch (e) {
+      console.error("DELETE /api/faq/unmatched/:id failed:", e);
+      res.status(500).json({ error: "Failed to dismiss query" });
     }
   });
 

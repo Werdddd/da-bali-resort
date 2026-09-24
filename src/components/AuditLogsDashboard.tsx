@@ -51,9 +51,10 @@ const ACTION_OPTIONS = [
   'amenity_created', 'amenity_updated', 'amenity_deactivated',
   'housekeeping_status_changed',
   'staff_created', 'staff_updated', 'user_deleted',
+  'faq_created', 'faq_updated', 'faq_deleted',
 ];
 
-const ENTITY_TYPE_OPTIONS = ['booking', 'amenity_booking', 'room', 'amenity', 'user'];
+const ENTITY_TYPE_OPTIONS = ['booking', 'amenity_booking', 'room', 'amenity', 'user', 'faq'];
 
 export const AuditLogsDashboard = ({ currentUser }: AuditLogsDashboardProps) => {
   const [logs, setLogs] = useState<AuditLog[]>([]);
