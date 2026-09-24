@@ -859,12 +859,21 @@ async function startServer() {
     name: 'da-bali-session',
     proxy: true,
     rolling: true,
-    cookie: { 
-      secure: true,
+    cookie: {
+      // 'auto' marks the cookie Secure only over HTTPS, so it is still set on plain http (e.g. localhost)
+      secure: 'auto',
       sameSite: 'none',
-      maxAge: 24 * 60 * 60 * 1000 
+      maxAge: 24 * 60 * 60 * 1000
     }
   }));
+
+  // Browsers reject SameSite=None cookies that aren't Secure, so fall back to Lax over plain http
+  app.use((req, res, next) => {
+    if (req.session && !req.secure) {
+      req.session.cookie.sameSite = 'lax';
+    }
+    next();
+  });
 
   // Request logging middleware
   app.use((req, res, next) => {

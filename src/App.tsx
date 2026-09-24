@@ -3151,6 +3151,13 @@ export default function App() {
       return null;
     }
   });
+  // Persist the logged-in user so a page refresh doesn't log them out
+  useEffect(() => {
+    try {
+      if (user) localStorage.setItem('user', JSON.stringify(user));
+      else localStorage.removeItem('user');
+    } catch {}
+  }, [user]);
   const [page, setPage] = useState(() => {
     const saved = localStorage.getItem('lastPage');
     return saved || 'home';
@@ -3159,6 +3166,10 @@ export default function App() {
   const [roomSearch, setRoomSearch] = useState('');
   const [showArchivedRooms, setShowArchivedRooms] = useState(false);
   const [roomFilter, setRoomFilter] = useState('All');
+  const [newBookingTab, setNewBookingTab] = useState<'rooms' | 'amenities'>('rooms');
+  useEffect(() => {
+    if (page !== 'rooms') setNewBookingTab('rooms');
+  }, [page]);
   const [amenities, setAmenities] = useState<Amenity[]>([]);
   const [amenitySearch, setAmenitySearch] = useState('');
   const [showArchivedAmenities, setShowArchivedAmenities] = useState(false);
@@ -5350,6 +5361,7 @@ export default function App() {
     const bookableRooms = rooms.filter(r => r.status !== 'inactive');
     const salakotRooms = bookableRooms.filter(r => r.name.includes('Salakot'));
     const bubuRooms = bookableRooms.filter(r => r.name.includes('Bubu'));
+    const showAmenities = isFromDashboard && newBookingTab === 'amenities';
 
     return (
       <div className="max-w-7xl mx-auto px-4 py-16 space-y-20">
@@ -5383,17 +5395,42 @@ export default function App() {
             </div>
             <span className="font-bold">{isFromDashboard ? 'Back to Dashboard' : 'Back to Accommodations'}</span>
           </button>
-          <select 
-            value={roomFilter ?? ''} 
-            onChange={(e) => setRoomFilter(e.target.value)}
-            className="bg-coffee-50 text-coffee-900 px-4 py-2 rounded-lg font-bold"
-          >
-            <option value="All">All Rooms</option>
-            <option value="Salakot">Salakot Rooms</option>
-            <option value="Bubu">Bubu Rooms</option>
-          </select>
+          {!showAmenities && (
+            <select
+              value={roomFilter ?? ''}
+              onChange={(e) => setRoomFilter(e.target.value)}
+              className="bg-coffee-50 text-coffee-900 px-4 py-2 rounded-lg font-bold"
+            >
+              <option value="All">All Rooms</option>
+              <option value="Salakot">Salakot Rooms</option>
+              <option value="Bubu">Bubu Rooms</option>
+            </select>
+          )}
         </div>
-        {(roomFilter === 'All' || roomFilter === 'Salakot') && (
+        {isFromDashboard && (
+          <div className="text-center -mt-8">
+            <h2 className="text-3xl font-serif font-bold text-coffee-900 mb-2">What would you like to book?</h2>
+            <p className="text-coffee-600 mb-6">Reserve a room for your stay or book one of our amenities.</p>
+            <div className="inline-flex bg-coffee-50 p-1.5 rounded-2xl border border-coffee-100 shadow-sm">
+              {([
+                { key: 'rooms', label: 'Rooms', icon: Bed },
+                { key: 'amenities', label: 'Amenities', icon: Sparkles },
+              ] as const).map(({ key, label, icon: Icon }) => (
+                <button
+                  key={key}
+                  onClick={() => setNewBookingTab(key)}
+                  className={`flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold text-sm transition-all ${
+                    newBookingTab === key ? 'bg-[#5C3321] text-white shadow-md' : 'text-coffee-700 hover:bg-coffee-100'
+                  }`}
+                >
+                  <Icon size={16} /> {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {showAmenities && renderAmenitySection()}
+        {!showAmenities && (roomFilter === 'All' || roomFilter === 'Salakot') && (
           <section>
             <div className="text-center mb-12">
               <h2 className="text-4xl font-serif font-bold text-coffee-900 mb-4">Salakot Rooms</h2>
@@ -5409,7 +5446,7 @@ export default function App() {
           </section>
         )}
 
-        {(roomFilter === 'All' || roomFilter === 'Bubu') && (
+        {!showAmenities && (roomFilter === 'All' || roomFilter === 'Bubu') && (
           <section>
             <div className="text-center mb-12">
               <h2 className="text-4xl font-serif font-bold text-coffee-900 mb-4">Bubu Family Suites</h2>
@@ -5462,6 +5499,12 @@ export default function App() {
             <span className="font-bold">{isFromDashboard ? 'Back to Dashboard' : 'Back to Amenities'}</span>
           </button>
         </div>
+        {renderAmenitySection()}
+      </div>
+    );
+  };
+
+  const renderAmenitySection = () => (
         <section>
           <div className="text-center mb-12">
             <h2 className="text-4xl font-serif font-bold text-coffee-900 mb-4">World-Class Amenities</h2>
@@ -5499,9 +5542,7 @@ export default function App() {
             ))}
           </div>
         </section>
-      </div>
-    );
-  };
+  );
 
   const renderBooking = () => {
     if (!selectedRoom) return null;
