@@ -7031,7 +7031,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (user?.role === 'admin') {
+    if (user?.role === 'admin' || user?.role === 'staff') {
       fetchAdminInbox();
       const interval = setInterval(fetchAdminInbox, 60000); // poll every 60s
       return () => clearInterval(interval);
@@ -7082,7 +7082,7 @@ export default function App() {
       { id: 'feedback', label: 'Guest Feedback', icon: <Star className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
       { id: 'audit-logs', label: 'Audit Logs', icon: <ScrollText className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
       { id: 'faq-chatbot', label: 'FAQ Chatbot', icon: <Bot className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
-      { id: 'messages', label: 'Support Chat', icon: <MessageSquare className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'], badge: totalUnreadMessages },
+      { id: 'messages', label: 'Support Chat', icon: <MessageSquare className="h-4 w-4 stroke-[1.5]" />, roles: ['admin', 'staff'], badge: totalUnreadMessages },
     ].filter(item => item.roles.includes(user?.role || ''));
 
     return (

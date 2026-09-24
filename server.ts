@@ -3128,6 +3128,14 @@ async function startServer() {
         sender_id = adminId;
       }
 
+      // Guest threads live on the admin account (the shared support inbox), so front-desk
+      // staff replies are stored as sent from that inbox - otherwise guests would never see them.
+      const sessionRole = (req.session as any)?.userRole;
+      const sessionUserId = req.session.userId ? parseInt(String(req.session.userId), 10) : null;
+      if (sessionRole === 'staff' && sessionUserId && sender_id === sessionUserId) {
+        sender_id = adminId;
+      }
+
       // Verify users exist
       const sender = db.prepare("SELECT id FROM users WHERE id = ?").get(sender_id);
       const receiver = db.prepare("SELECT id FROM users WHERE id = ?").get(receiver_id);
@@ -3165,7 +3173,10 @@ async function startServer() {
         return res.status(404).json({ error: "Message not found" });
       }
 
-      if (message.sender_id !== userId) {
+      const userRole = (req.session as any)?.userRole;
+      const admin = db.prepare("SELECT id FROM users WHERE role = 'admin' LIMIT 1").get() as any;
+      const isSupportReply = admin && message.sender_id === admin.id && (userRole === 'admin' || userRole === 'staff');
+      if (message.sender_id !== userId && !isSupportReply) {
         return res.status(403).json({ error: "Forbidden: You can only delete your own messages" });
       }
 
@@ -3177,9 +3188,11 @@ async function startServer() {
     }
   });
 
-  app.get("/api/admin/messages/inbox", isAdmin, (req, res) => {
+  app.get("/api/admin/messages/inbox", isStaffOrAdmin, (req, res) => {
     try {
-      const adminId = (req as any).adminId;
+      // Staff work the same shared support inbox as the admin, so always read the admin account's threads
+      const admin = db.prepare("SELECT id FROM users WHERE role = 'admin' LIMIT 1").get() as any;
+      const adminId = admin ? admin.id : (req as any).adminId;
       const conversations = db.prepare(`
         SELECT 
           u.id as user_id, 
@@ -3225,10 +3238,11 @@ async function startServer() {
     }
   });
 
-  app.patch("/api/admin/messages/:userId/read", isAdmin, (req, res) => {
+  app.patch("/api/admin/messages/:userId/read", isStaffOrAdmin, (req, res) => {
     try {
       const userId = parseInt(req.params.userId);
-      const adminId = (req as any).adminId;
+      const admin = db.prepare("SELECT id FROM users WHERE role = 'admin' LIMIT 1").get() as any;
+      const adminId = admin ? admin.id : (req as any).adminId;
       db.prepare(`
         UPDATE messages SET is_read = 1 
         WHERE sender_id = ? AND receiver_id = ? AND is_read = 0
