@@ -262,3 +262,57 @@ export interface FaqChatResponse {
   question: string | null;
   suggestions: { id: number; question: string }[];
 }
+
+export interface PosCatalogAmenity {
+  amenity_id: number;
+  amenity_name: string;
+  stock: number | null;
+  status: 'active' | 'inactive';
+  categories: { category: string; items: { name: string; price: number }[] }[];
+}
+
+export interface PosTransactionItem {
+  id: number;
+  transaction_id: number;
+  amenity_id: number;
+  amenity_name: string;
+  category: string;
+  item_name: string;
+  unit_price: number;
+  quantity: number;
+  line_total: number;
+  deducts_stock: number;
+}
+
+export interface PosTransaction {
+  id: number;
+  receipt_no: string;
+  customer_name: string;
+  contact_no: string | null;
+  payment_method: 'Cash' | 'GCash' | 'BPI';
+  transaction_reference: string | null;
+  total: number;
+  amount_tendered: number;
+  change_due: number;
+  status: 'completed' | 'voided';
+  notes: string | null;
+  cashier_id: number | null;
+  cashier_name: string;
+  void_reason: string | null;
+  voided_by_name: string;
+  voided_at: string | null;
+  rentals_returned_at: string | null;
+  created_at: string;
+  items: PosTransactionItem[];
+}
+
+export interface PosDailySummary {
+  date: string;
+  transaction_count: number;
+  voided_count: number;
+  total_sales: number;
+  entrance_fees: number;
+  entrance_headcount: number;
+  rentals: number;
+  by_payment_method: { method: string; total: number }[];
+}

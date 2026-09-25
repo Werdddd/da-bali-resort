@@ -53,9 +53,10 @@ const ACTION_OPTIONS = [
   'staff_created', 'staff_updated', 'user_deleted',
   'faq_created', 'faq_updated', 'faq_deleted',
   'feedback_hidden', 'feedback_unhidden', 'feedback_deleted',
+  'pos_sale_recorded', 'pos_rentals_returned', 'pos_sale_voided',
 ];
 
-const ENTITY_TYPE_OPTIONS = ['booking', 'amenity_booking', 'room', 'amenity', 'user', 'faq', 'feedback'];
+const ENTITY_TYPE_OPTIONS = ['booking', 'amenity_booking', 'room', 'amenity', 'user', 'faq', 'feedback', 'pos_transaction'];
 
 export const AuditLogsDashboard = ({ currentUser }: AuditLogsDashboardProps) => {
   const [logs, setLogs] = useState<AuditLog[]>([]);

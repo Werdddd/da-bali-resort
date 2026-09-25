@@ -14,6 +14,14 @@ export interface InvoiceData {
   totalPrice: number;
   amountPaid: number;
   amountDue: number;
+  // Optional POS receipt extras
+  documentTitle?: string; // defaults to "Official Invoice / Receipt"
+  documentNumber?: string; // defaults to "#000123" built from id
+  codeLabel?: string; // defaults to "Reservation Code"
+  totalLabel?: string; // defaults to "Total Quotation"
+  lineItems?: { description: string; quantity: number; unitPrice: number; total: number }[];
+  paymentRows?: { label: string; value: number }[]; // e.g. cash tendered / change, shown under the totals
+  footerNote?: string;
 }
 
 const PESO = (n: number) => `PHP ${n.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -42,19 +50,19 @@ export function generateInvoicePdf(data: InvoiceData): Promise<Buffer> {
         .fillColor(coffee600)
         .fontSize(10)
         .font("Helvetica")
-        .text("Official Invoice / Receipt", 50, 78);
+        .text(data.documentTitle || "Official Invoice / Receipt", 50, 78);
 
       doc
         .fillColor(coffee900)
         .fontSize(10)
         .font("Helvetica-Bold")
-        .text(`Invoice No: #${data.id.toString().padStart(6, "0")}`, 0, 50, { align: "right" });
+        .text(`${data.documentNumber ? "Receipt No" : "Invoice No"}: ${data.documentNumber || `#${data.id.toString().padStart(6, "0")}`}`, 0, 50, { align: "right" });
       doc
         .fillColor(coffee600)
         .font("Helvetica")
         .text(`Date: ${data.createdAt}`, 0, 65, { align: "right" });
       doc
-        .fillColor(data.status.toLowerCase().includes("confirm") || data.status.toLowerCase().includes("complet") ? "#2E7D32" : coffee900)
+        .fillColor(data.status.toLowerCase().includes("confirm") || data.status.toLowerCase().includes("complet") ? "#2E7D32" : data.status.toLowerCase().includes("void") ? "#C62828" : coffee900)
         .font("Helvetica-Bold")
         .text(data.status.toUpperCase(), 0, 80, { align: "right" });
 
@@ -75,7 +83,7 @@ export function generateInvoicePdf(data: InvoiceData): Promise<Buffer> {
       doc.moveTo(50, y).lineTo(545, y).strokeColor("#E0D5C8").stroke();
       y += 15;
 
-      doc.fillColor(coffee600).fontSize(10).font("Helvetica").text("Reservation Code", 50, y);
+      doc.fillColor(coffee600).fontSize(10).font("Helvetica").text(data.codeLabel || "Reservation Code", 50, y);
       doc.fillColor(coffee900).font("Helvetica-Bold").fontSize(12).text(data.reservationCode, 300, y, { width: 245, align: "right" });
 
       y += 25;
@@ -89,13 +97,47 @@ export function generateInvoicePdf(data: InvoiceData): Promise<Buffer> {
         y += 22;
       }
 
+      // Itemized lines (POS receipts)
+      if (data.lineItems && data.lineItems.length > 0) {
+        y += 10;
+        const drawItemHeader = () => {
+          doc.rect(50, y - 4, 495, 20).fillOpacity(0.06).fillColor(coffee900).fill();
+          doc.fillOpacity(1);
+          doc.fillColor(coffee600).fontSize(9).font("Helvetica-Bold");
+          doc.text("ITEM", 58, y + 1, { width: 250 });
+          doc.text("QTY", 310, y + 1, { width: 40, align: "right" });
+          doc.text("UNIT PRICE", 355, y + 1, { width: 90, align: "right" });
+          doc.text("AMOUNT", 450, y + 1, { width: 87, align: "right" });
+          y += 24;
+        };
+        drawItemHeader();
+        for (const line of data.lineItems) {
+          const descHeight = doc.font("Helvetica").fontSize(10).heightOfString(line.description, { width: 250 });
+          if (y + descHeight > 760) {
+            doc.addPage();
+            y = 50;
+            drawItemHeader();
+          }
+          doc.fillColor(coffee900).fontSize(10).font("Helvetica").text(line.description, 58, y, { width: 250 });
+          doc.text(String(line.quantity), 310, y, { width: 40, align: "right" });
+          doc.text(PESO(line.unitPrice), 355, y, { width: 90, align: "right" });
+          doc.font("Helvetica-Bold").text(PESO(line.total), 450, y, { width: 87, align: "right" });
+          y += Math.max(descHeight, 14) + 8;
+        }
+      }
+
+      if (y > 640) {
+        doc.addPage();
+        y = 50;
+      }
+
       y += 10;
       doc.moveTo(50, y).lineTo(545, y).strokeColor("#E0D5C8").stroke();
       y += 20;
 
       // Pricing box
       const boxTop = y;
-      doc.fillColor(coffee600).fontSize(10).font("Helvetica").text("Total Quotation", 50, y);
+      doc.fillColor(coffee600).fontSize(10).font("Helvetica").text(data.totalLabel || "Total Quotation", 50, y);
       doc.fillColor(accent).font("Helvetica-Bold").fontSize(12).text(PESO(data.totalPrice), 300, y, { width: 245, align: "right" });
 
       y += 22;
@@ -111,12 +153,18 @@ export function generateInvoicePdf(data: InvoiceData): Promise<Buffer> {
         y += 22;
       }
 
+      for (const row of data.paymentRows || []) {
+        y += 22;
+        doc.fillColor(coffee600).fontSize(10).font("Helvetica").text(row.label, 50, y);
+        doc.fillColor(coffee900).font("Helvetica-Bold").fontSize(11).text(PESO(row.value), 300, y, { width: 245, align: "right" });
+      }
+
       y += 40;
       doc
         .fillColor(coffee400)
         .fontSize(9)
         .font("Helvetica")
-        .text("This is a computer-generated invoice. No signature required.", 50, y, { width: 495, align: "center" });
+        .text(data.footerNote || "This is a computer-generated invoice. No signature required.", 50, y, { width: 495, align: "center" });
 
       doc.end();
     } catch (err) {

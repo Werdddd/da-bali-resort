@@ -13,7 +13,7 @@ import nodemailer from "nodemailer";
 import cors from "cors";
 import fs from "fs";
 import { generateInvoicePdf } from "./pdf-invoice";
-import { calculateAmenityItemsTotal, isCottageSelection } from "./src/amenityOptions";
+import { calculateAmenityItemsTotal, isCottageSelection, findPosItem, getPosAmenityOptions } from "./src/amenityOptions";
 
 // --- IN-MEMORY LOGGER FOR DEBUGGING ---
 const debugLogs: string[] = [];
@@ -744,6 +744,52 @@ try {
 try {
   db.prepare("ALTER TABLE amenity_bookings ADD COLUMN total_price REAL DEFAULT 0").run();
 } catch (e) {}
+
+// Front-desk POS: walk-in pool entrance fees and amenity rentals. Each sale is one
+// transaction with its line items; prices/names are copied onto the line at sale time so
+// receipts stay accurate even if the menu later changes. Voided sales are kept (never
+// deleted) for the audit trail, and any stock they took is returned on void.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS pos_transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    receipt_no TEXT UNIQUE,
+    customer_name TEXT,
+    contact_no TEXT,
+    payment_method TEXT,
+    transaction_reference TEXT,
+    total REAL DEFAULT 0,
+    amount_tendered REAL DEFAULT 0,
+    change_due REAL DEFAULT 0,
+    status TEXT DEFAULT 'completed',
+    notes TEXT,
+    cashier_id INTEGER,
+    void_reason TEXT,
+    voided_by INTEGER,
+    rentals_returned_at DATETIME,
+    voided_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(cashier_id) REFERENCES users(id),
+    FOREIGN KEY(voided_by) REFERENCES users(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS pos_transaction_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    transaction_id INTEGER NOT NULL,
+    amenity_id INTEGER,
+    amenity_name TEXT,
+    category TEXT,
+    item_name TEXT,
+    unit_price REAL,
+    quantity INTEGER,
+    line_total REAL,
+    deducts_stock INTEGER DEFAULT 0,
+    FOREIGN KEY(transaction_id) REFERENCES pos_transactions(id),
+    FOREIGN KEY(amenity_id) REFERENCES amenities(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_pos_transactions_created_at ON pos_transactions(created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_pos_items_transaction ON pos_transaction_items(transaction_id);
+`);
 
 // Migration: Ensure images exists in rooms
 try {
@@ -2197,6 +2243,318 @@ async function startServer() {
     }
   });
 
+  // --- Front-desk POS: walk-in pool entrance fees & amenity rentals ---
+  const POS_PAYMENT_METHODS = ['Cash', 'GCash', 'BPI'];
+  const roundMoney = (n: number) => Math.round(n * 100) / 100;
+  // SQLite CURRENT_TIMESTAMP is UTC without a zone marker
+  const parseDbTimestamp = (value: string) => new Date(String(value).replace(' ', 'T') + 'Z');
+
+  class PosError extends Error {
+    constructor(message: string, public status = 400) { super(message); }
+  }
+
+  const loadPosTransaction = (id: number | string) => {
+    const txn = db.prepare(`
+      SELECT t.*,
+             TRIM(COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, '')) as cashier_name,
+             TRIM(COALESCE(v.first_name, '') || ' ' || COALESCE(v.last_name, '')) as voided_by_name
+      FROM pos_transactions t
+      LEFT JOIN users c ON t.cashier_id = c.id
+      LEFT JOIN users v ON t.voided_by = v.id
+      WHERE t.id = ?
+    `).get(id) as any;
+    if (!txn) return null;
+    txn.items = db.prepare("SELECT * FROM pos_transaction_items WHERE transaction_id = ? ORDER BY id").all(txn.id);
+    return txn;
+  };
+
+  // Gives back the stock a sale's rental lines took (used by both "rentals returned" and void)
+  const restorePosRentalStock = (transactionId: number) => {
+    const rentals = db.prepare(`
+      SELECT amenity_id, SUM(quantity) as qty FROM pos_transaction_items
+      WHERE transaction_id = ? AND deducts_stock = 1 GROUP BY amenity_id
+    `).all(transactionId) as { amenity_id: number; qty: number }[];
+    for (const r of rentals) {
+      db.prepare("UPDATE amenities SET stock = stock + ? WHERE id = ? AND stock IS NOT NULL").run(r.qty, r.amenity_id);
+    }
+    return rentals.length > 0;
+  };
+
+  // Sellable POS menu joined with live amenity stock/status
+  app.get("/api/pos/catalog", isStaffOrAdmin, (req, res) => {
+    try {
+      const posOptions = getPosAmenityOptions();
+      const amenities = db.prepare("SELECT id, name, stock, status FROM amenities").all() as { id: number; name: string; stock: number | null; status: string }[];
+      const catalog = amenities
+        .filter(a => posOptions[a.name])
+        .map(a => ({ amenity_id: a.id, amenity_name: a.name, stock: a.stock, status: a.status, categories: posOptions[a.name] }));
+      res.json(catalog);
+    } catch (e) {
+      console.error("POS catalog error:", e);
+      res.status(500).json({ error: "Failed to load POS catalog" });
+    }
+  });
+
+  app.get("/api/pos/transactions", isStaffOrAdmin, (req, res) => {
+    try {
+      const date = typeof req.query.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
+        ? req.query.date
+        : format(new Date(), 'yyyy-MM-dd');
+      const ids = db.prepare(`
+        SELECT id FROM pos_transactions
+        WHERE date(created_at, 'localtime') = ?
+        ORDER BY created_at DESC, id DESC
+      `).all(date) as { id: number }[];
+      const transactions = ids.map(r => loadPosTransaction(r.id));
+
+      const completed = transactions.filter(t => t.status === 'completed');
+      const allItems = completed.flatMap(t => t.items);
+      const entranceItems = allItems.filter((i: any) => !i.deducts_stock);
+      const rentalItems = allItems.filter((i: any) => i.deducts_stock);
+      const summary = {
+        date,
+        transaction_count: completed.length,
+        voided_count: transactions.length - completed.length,
+        total_sales: roundMoney(completed.reduce((sum, t) => sum + (t.total || 0), 0)),
+        entrance_fees: roundMoney(entranceItems.reduce((sum: number, i: any) => sum + i.line_total, 0)),
+        entrance_headcount: entranceItems.reduce((sum: number, i: any) => sum + i.quantity, 0),
+        rentals: roundMoney(rentalItems.reduce((sum: number, i: any) => sum + i.line_total, 0)),
+        by_payment_method: POS_PAYMENT_METHODS.map(method => ({
+          method,
+          total: roundMoney(completed.filter(t => t.payment_method === method).reduce((sum, t) => sum + (t.total || 0), 0)),
+        })),
+      };
+      res.json({ transactions, summary });
+    } catch (e) {
+      console.error("POS transactions fetch error:", e);
+      res.status(500).json({ error: "Failed to fetch POS transactions" });
+    }
+  });
+
+  app.post("/api/pos/transactions", isStaffOrAdmin, (req, res) => {
+    try {
+      const { items, customerName, contactNo, paymentMethod, amountTendered, transactionReference, notes } = req.body || {};
+
+      if (!Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ error: "Add at least one item to the sale." });
+      }
+      if (!POS_PAYMENT_METHODS.includes(paymentMethod)) {
+        return res.status(400).json({ error: "Invalid payment method." });
+      }
+
+      // Prices always come from the shared menu, never from the request
+      const lines = new Map<string, { amenity_id: number; amenity_name: string; category: string; item_name: string; unit_price: number; quantity: number; deducts_stock: boolean }>();
+      for (const raw of items) {
+        const quantity = Number(raw?.quantity);
+        if (!Number.isInteger(quantity) || quantity <= 0 || quantity > 1000) {
+          return res.status(400).json({ error: "Each item quantity must be a whole number between 1 and 1000." });
+        }
+        const entry = findPosItem(String(raw?.amenityName || ''), String(raw?.itemName || ''));
+        if (!entry) {
+          return res.status(400).json({ error: `"${raw?.itemName}" is not available at the POS.` });
+        }
+        const amenity = db.prepare("SELECT id, status FROM amenities WHERE name = ?").get(entry.amenityName) as { id: number; status: string } | undefined;
+        if (!amenity || amenity.status === 'inactive') {
+          return res.status(400).json({ error: `${entry.amenityName} is currently unavailable.` });
+        }
+        const key = `${entry.amenityName}::${entry.itemName}`;
+        const existing = lines.get(key);
+        if (existing) {
+          existing.quantity += quantity;
+        } else {
+          lines.set(key, { amenity_id: amenity.id, amenity_name: entry.amenityName, category: entry.category, item_name: entry.itemName, unit_price: entry.price, quantity, deducts_stock: entry.deductsStock });
+        }
+      }
+
+      const total = roundMoney([...lines.values()].reduce((sum, l) => sum + l.unit_price * l.quantity, 0));
+
+      let tendered = total;
+      let change = 0;
+      let reference: string | null = null;
+      if (paymentMethod === 'Cash') {
+        tendered = roundMoney(Number(amountTendered));
+        if (!Number.isFinite(tendered) || tendered < total) {
+          return res.status(400).json({ error: "Cash received must cover the total amount." });
+        }
+        change = roundMoney(tendered - total);
+      } else {
+        reference = String(transactionReference || '').trim().slice(0, 100);
+        if (!reference) {
+          return res.status(400).json({ error: `Enter the ${paymentMethod} reference number.` });
+        }
+      }
+
+      const { userId } = getAuthContext(req);
+      const name = String(customerName || '').trim().slice(0, 100) || 'Walk-in Guest';
+      const contact = String(contactNo || '').trim().slice(0, 30) || null;
+      const note = String(notes || '').trim().slice(0, 500) || null;
+
+      const recordSale = db.transaction(() => {
+        // Stock is re-checked inside the write transaction so two terminals can't oversell
+        const needByAmenity = new Map<number, { name: string; qty: number }>();
+        for (const l of lines.values()) {
+          if (!l.deducts_stock) continue;
+          const cur = needByAmenity.get(l.amenity_id) || { name: l.amenity_name, qty: 0 };
+          cur.qty += l.quantity;
+          needByAmenity.set(l.amenity_id, cur);
+        }
+        for (const [amenityId, need] of needByAmenity) {
+          const row = db.prepare("SELECT stock FROM amenities WHERE id = ?").get(amenityId) as { stock: number | null };
+          if (row.stock !== null && row.stock !== undefined && row.stock < need.qty) {
+            throw new PosError(`Not enough stock for ${need.name}: ${row.stock} left, ${need.qty} requested.`);
+          }
+          db.prepare("UPDATE amenities SET stock = stock - ? WHERE id = ? AND stock IS NOT NULL").run(need.qty, amenityId);
+        }
+
+        const info = db.prepare(`
+          INSERT INTO pos_transactions (customer_name, contact_no, payment_method, transaction_reference, total, amount_tendered, change_due, status, notes, cashier_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?)
+        `).run(name, contact, paymentMethod, reference, total, tendered, change, note, userId || null);
+        const id = Number(info.lastInsertRowid);
+        const receiptNo = `POS-${format(new Date(), 'yyyyMMdd')}-${String(id).padStart(5, '0')}`;
+        db.prepare("UPDATE pos_transactions SET receipt_no = ? WHERE id = ?").run(receiptNo, id);
+
+        const insertItem = db.prepare(`
+          INSERT INTO pos_transaction_items (transaction_id, amenity_id, amenity_name, category, item_name, unit_price, quantity, line_total, deducts_stock)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        for (const l of lines.values()) {
+          insertItem.run(id, l.amenity_id, l.amenity_name, l.category, l.item_name, l.unit_price, l.quantity, roundMoney(l.unit_price * l.quantity), l.deducts_stock ? 1 : 0);
+        }
+        return { id, receiptNo, stockChanged: needByAmenity.size > 0 };
+      });
+
+      let result: { id: number; receiptNo: string; stockChanged: boolean };
+      try {
+        result = recordSale();
+      } catch (err) {
+        if (err instanceof PosError) return res.status(err.status).json({ error: err.message });
+        throw err;
+      }
+
+      logAuditAction(req, 'pos_sale_recorded', 'pos_transaction', result.id, result.receiptNo, {
+        total, payment_method: paymentMethod, items: [...lines.values()].map(l => `${l.quantity}x ${l.item_name}`).join(', ')
+      });
+      if (result.stockChanged) broadcast({ type: 'AMENITIES_UPDATED' });
+      broadcast({ type: 'POS_TRANSACTION_UPDATED' });
+      res.json(loadPosTransaction(result.id));
+    } catch (e) {
+      console.error("POS sale error:", e);
+      res.status(500).json({ error: "Failed to record the sale." });
+    }
+  });
+
+  // Cottages/venues come back at the end of the rental, freeing their stock for the next walk-in
+  app.post("/api/pos/transactions/:id/return-rentals", isStaffOrAdmin, (req, res) => {
+    try {
+      const txn = db.prepare("SELECT id, receipt_no, status, rentals_returned_at FROM pos_transactions WHERE id = ?").get(req.params.id) as any;
+      if (!txn) return res.status(404).json({ error: "Transaction not found." });
+      if (txn.status !== 'completed') return res.status(400).json({ error: "Only completed sales can have rentals returned." });
+      if (txn.rentals_returned_at) return res.status(400).json({ error: "Rentals for this sale were already returned." });
+
+      const returnRentals = db.transaction(() => {
+        if (!restorePosRentalStock(txn.id)) throw new PosError("This sale has no rental items.");
+        db.prepare("UPDATE pos_transactions SET rentals_returned_at = CURRENT_TIMESTAMP WHERE id = ?").run(txn.id);
+      });
+      try {
+        returnRentals();
+      } catch (err) {
+        if (err instanceof PosError) return res.status(err.status).json({ error: err.message });
+        throw err;
+      }
+
+      logAuditAction(req, 'pos_rentals_returned', 'pos_transaction', txn.id, txn.receipt_no);
+      broadcast({ type: 'AMENITIES_UPDATED' });
+      broadcast({ type: 'POS_TRANSACTION_UPDATED' });
+      res.json(loadPosTransaction(txn.id));
+    } catch (e) {
+      console.error("POS return rentals error:", e);
+      res.status(500).json({ error: "Failed to return rentals." });
+    }
+  });
+
+  // Voiding is admin-only so front desk can't erase their own cash sales
+  app.post("/api/pos/transactions/:id/void", isAdmin, (req, res) => {
+    try {
+      const reason = String(req.body?.reason || '').trim().slice(0, 300);
+      if (!reason) return res.status(400).json({ error: "A reason is required to void a sale." });
+
+      const txn = db.prepare("SELECT id, receipt_no, status, total, rentals_returned_at FROM pos_transactions WHERE id = ?").get(req.params.id) as any;
+      if (!txn) return res.status(404).json({ error: "Transaction not found." });
+      if (txn.status === 'voided') return res.status(400).json({ error: "This sale is already voided." });
+
+      const { userId } = getAuthContext(req);
+      let stockChanged = false;
+      db.transaction(() => {
+        if (!txn.rentals_returned_at) stockChanged = restorePosRentalStock(txn.id);
+        db.prepare("UPDATE pos_transactions SET status = 'voided', void_reason = ?, voided_by = ?, voided_at = CURRENT_TIMESTAMP WHERE id = ?").run(reason, userId || null, txn.id);
+      })();
+
+      logAuditAction(req, 'pos_sale_voided', 'pos_transaction', txn.id, txn.receipt_no, { total: txn.total, reason });
+      if (stockChanged) broadcast({ type: 'AMENITIES_UPDATED' });
+      broadcast({ type: 'POS_TRANSACTION_UPDATED' });
+      res.json(loadPosTransaction(txn.id));
+    } catch (e) {
+      console.error("POS void error:", e);
+      res.status(500).json({ error: "Failed to void the sale." });
+    }
+  });
+
+  app.get("/api/pos/transactions/:id/receipt", isStaffOrAdmin, async (req, res) => {
+    try {
+      const txn = loadPosTransaction(req.params.id);
+      if (!txn) return res.status(404).json({ error: "Transaction not found." });
+
+      const isVoided = txn.status === 'voided';
+      const createdAt = parseDbTimestamp(txn.created_at);
+      const details = [
+        { label: "Date & Time", value: format(createdAt, 'MMM dd, yyyy h:mm a') },
+        { label: "Cashier", value: txn.cashier_name || 'Front Desk' },
+      ];
+      if (txn.contact_no) details.push({ label: "Contact No.", value: txn.contact_no });
+      if (txn.transaction_reference) details.push({ label: "Reference No.", value: txn.transaction_reference });
+      if (isVoided) details.push({ label: "Void Reason", value: txn.void_reason || 'N/A' });
+
+      const pdfBuffer = await generateInvoicePdf({
+        id: txn.id,
+        documentTitle: "Official Receipt - Front Desk POS",
+        documentNumber: txn.receipt_no,
+        createdAt: format(createdAt, 'MMM dd, yyyy'),
+        status: isVoided ? 'VOIDED' : 'COMPLETED',
+        paymentMethod: txn.payment_method,
+        codeLabel: "Receipt No.",
+        totalLabel: "Total Amount",
+        reservationCode: txn.receipt_no,
+        itemLabel: "Transaction",
+        itemName: "Walk-in Sale",
+        guestName: txn.customer_name || 'Walk-in Guest',
+        details,
+        lineItems: txn.items.map((i: any) => ({
+          description: `${i.item_name}\n${i.amenity_name} - ${i.category}`,
+          quantity: i.quantity,
+          unitPrice: i.unit_price,
+          total: i.line_total,
+        })),
+        totalPrice: txn.total,
+        amountPaid: isVoided ? 0 : txn.total,
+        amountDue: 0,
+        paymentRows: !isVoided && txn.payment_method === 'Cash'
+          ? [{ label: "Cash Received", value: txn.amount_tendered }, { label: "Change", value: txn.change_due }]
+          : [],
+        footerNote: isVoided
+          ? "This sale has been VOIDED and is not valid as proof of payment."
+          : "Thank you for visiting Da Bali Resort! Please keep this receipt for the duration of your visit.",
+      });
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=receipt_${txn.receipt_no}.pdf`);
+      res.send(pdfBuffer);
+    } catch (e) {
+      console.error("POS receipt generation error:", e);
+      res.status(500).json({ error: "Failed to generate receipt" });
+    }
+  });
+
   // Amenity Booking Routes
   app.get("/api/amenity-bookings", isStaffOrAdmin, (req, res) => {
     try {
@@ -3367,6 +3725,8 @@ async function startServer() {
           (SELECT SUM(amount_paid + COALESCE(balance_amount_paid, 0)) 
            FROM amenity_bookings 
            WHERE payment_status = 'Fully Paid'), 0
+        ) + COALESCE(
+          (SELECT SUM(total) FROM pos_transactions WHERE status = 'completed'), 0
         ) as total
       `).get() as { total: number };
       
@@ -3380,9 +3740,12 @@ async function startServer() {
           (SELECT SUM(amount_paid + COALESCE(balance_amount_paid, 0)) 
            FROM amenity_bookings 
            WHERE payment_status = 'Fully Paid' AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')), 0
+        ) + COALESCE(
+          (SELECT SUM(total) FROM pos_transactions
+           WHERE status = 'completed' AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')), 0
         ) as total
       `).get() as { total: number };
-      
+
       const bookingCount = db.prepare("SELECT COUNT(*) as count FROM bookings").get() as { count: number };
       const amenityBookingCount = db.prepare("SELECT COUNT(*) as count FROM amenity_bookings").get() as { count: number };
       const userCount = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'guest'").get() as { count: number };

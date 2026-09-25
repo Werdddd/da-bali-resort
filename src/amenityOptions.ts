@@ -126,3 +126,38 @@ export function isCottageSelection(amenityName: string, selections: Record<strin
   if (!cottageCategory || !selections) return false;
   return Object.entries(selections).some(([itemName, qty]) => Number(qty) > 0 && cottageCategory.items.some(i => i.name === itemName));
 }
+
+// --- Front-desk POS (walk-in entrance fees & amenity rentals) ---
+// Categories the POS may sell. Entrance fees are recorded as revenue only; rental categories
+// also take units off the amenity's stock the moment the sale is recorded. Food & drink menus
+// (Fine Dining) are intentionally not part of the POS.
+export const POS_ENTRANCE_CATEGORY = 'Entrance Fee';
+export const POS_RENTAL_CATEGORIES = ['Cottages', 'Packages'];
+export const POS_CATEGORIES = [POS_ENTRANCE_CATEGORY, ...POS_RENTAL_CATEGORIES];
+
+export type PosCatalogEntry = { amenityName: string; category: string; itemName: string; price: number; deductsStock: boolean };
+
+// Looks up a sellable POS item by name. Returns null for anything outside the POS categories,
+// so the server only ever charges prices from this file, never from the client.
+export function findPosItem(amenityName: string, itemName: string): PosCatalogEntry | null {
+  const options = AMENITY_OPTIONS[amenityName];
+  if (!options) return null;
+  for (const cat of options) {
+    if (!POS_CATEGORIES.includes(cat.category)) continue;
+    const item = cat.items.find(i => i.name === itemName);
+    if (item) {
+      return { amenityName, category: cat.category, itemName: item.name, price: item.price, deductsStock: POS_RENTAL_CATEGORIES.includes(cat.category) };
+    }
+  }
+  return null;
+}
+
+// Every amenity that has at least one POS-sellable category, with only those categories kept.
+export function getPosAmenityOptions(): Record<string, AmenityOptionCategory[]> {
+  const result: Record<string, AmenityOptionCategory[]> = {};
+  for (const [amenityName, categories] of Object.entries(AMENITY_OPTIONS)) {
+    const sellable = categories.filter(c => POS_CATEGORIES.includes(c.category));
+    if (sellable.length > 0) result[amenityName] = sellable;
+  }
+  return result;
+}

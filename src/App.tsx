@@ -79,6 +79,7 @@ import { AnalyticsDashboard } from './components/AnalyticsDashboard';
 import { AuditLogsDashboard } from './components/AuditLogsDashboard';
 import { FeedbackManagementDashboard } from './components/FeedbackManagementDashboard';
 import { FaqManagementDashboard } from './components/FaqManagementDashboard';
+import { POSDashboard } from './components/POSDashboard';
 import { ResortChatWidget, ChatTab } from './components/ResortChatWidget';
 import { SupportChatMessage } from './components/StaffChatPanel';
 import { getRoomStatusLabel, getRoomStatusBadgeClass } from './utils/roomStatus';
@@ -3205,7 +3206,8 @@ export default function App() {
   const [isCheckingIn, setIsCheckingIn] = useState(false);
   const [feedbackForm, setFeedbackForm] = useState({ rating: 5, comment: '' });
   const [proofFile, setProofFile] = useState<string | null>(null);
-  const [adminActiveTab, setAdminActiveTab] = useState<'overview' | 'analytics' | 'reservations' | 'rooms' | 'amenities' | 'dtr' | 'payments' | 'slideshow' | 'staff-records' | 'messages' | 'housekeeping' | 'audit-logs' | 'faq-chatbot' | 'feedback'>('overview');
+  const [adminActiveTab, setAdminActiveTab] = useState<'overview' | 'analytics' | 'reservations' | 'rooms' | 'amenities' | 'dtr' | 'payments' | 'slideshow' | 'staff-records' | 'messages' | 'housekeeping' | 'audit-logs' | 'faq-chatbot' | 'feedback' | 'pos'>('overview');
+  const [posRefreshKey, setPosRefreshKey] = useState(0);
   const [staffRecordsTab, setStaffRecordsTab] = useState<'directory' | 'management' | 'history'>('directory');
   const [reservationsTab, setReservationsTab] = useState<'all' | 'accommodation' | 'amenity'>('all');
   const [reservationFilter, setReservationFilter] = useState<'Upcoming' | 'Completed' | 'Archived'>('Upcoming');
@@ -3931,6 +3933,9 @@ export default function App() {
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+        if (data.type === 'POS_TRANSACTION_UPDATED' || data.type === 'AMENITIES_UPDATED') {
+          setPosRefreshKey(k => k + 1);
+        }
         if (data.type === 'BOOKING_CREATED' || data.type === 'BOOKING_UPDATED' || data.type === 'FEEDBACK_ADDED' || data.type === 'DTR_UPDATED' || data.type === 'HERO_BANNERS_UPDATED' || data.type === 'AMENITY_BOOKING_UPDATED' || data.type === 'AMENITY_BOOKING_CREATED' || data.type === 'AMENITIES_UPDATED' || data.type === 'HOUSEKEEPING_UPDATED' || data.type === 'ROOMS_UPDATED') {
           fetchRooms().catch(console.error);
           fetchFeedbacks().catch(console.error);
@@ -7074,6 +7079,7 @@ export default function App() {
       { id: 'analytics', label: 'Analytics', icon: <PieChart className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
       { id: 'reservations', label: 'All Reservation', icon: <Calendar className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
       { id: 'payments', label: 'Payments', icon: <CreditCard className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
+      { id: 'pos', label: 'Front Desk POS', icon: <Receipt className="h-4 w-4 stroke-[1.5]" />, roles: ['admin', 'staff'] },
       { id: 'rooms', label: 'Room Management', icon: <Bed className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
       { id: 'amenities', label: 'Amenity Management', icon: <Flower className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
       { id: 'slideshow', label: 'Slideshow Management', icon: <LayoutDashboard className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
@@ -7300,6 +7306,23 @@ export default function App() {
                           onRefresh={fetchAnalytics}
                         />
                       </div>
+                    </motion.div>
+                  )}
+                  {adminActiveTab === 'pos' && (
+                    <motion.div
+                      key="pos"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      className="w-full flex-1 flex flex-col gap-y-6"
+                    >
+                      <div className="max-w-7xl mx-auto w-full">
+                        <div className="mb-2">
+                          <h1 className="text-4xl font-serif font-bold text-coffee-900">Front Desk POS</h1>
+                          <p className="text-coffee-500 mt-2">Collect pool entrance fees and record walk-in amenity rentals. Rentals are deducted from stock as soon as the sale is recorded.</p>
+                        </div>
+                      </div>
+                      <POSDashboard currentUser={user!} setToastMessage={setToastMessage} refreshKey={posRefreshKey} />
                     </motion.div>
                   )}
                   {adminActiveTab === 'audit-logs' && (
@@ -9085,7 +9108,7 @@ export default function App() {
   }, [user, page]);
 
   useEffect(() => {
-    if (user?.role === 'staff' && adminActiveTab !== 'staff-records') {
+    if (user?.role === 'staff' && !['staff-records', 'housekeeping', 'messages', 'pos'].includes(adminActiveTab)) {
       setAdminActiveTab('staff-records');
     } else if (user?.role === 'housekeeping' && adminActiveTab !== 'housekeeping') {
       setAdminActiveTab('housekeeping');
