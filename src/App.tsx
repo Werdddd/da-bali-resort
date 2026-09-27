@@ -66,6 +66,7 @@ import {
   ScrollText,
   Bot,
   ImageOff,
+  Target,
 } from 'lucide-react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { format, addDays, differenceInDays, isBefore, startOfToday, getDaysInMonth, startOfMonth } from 'date-fns';
@@ -739,6 +740,37 @@ const Footer = ({ onNavigate }: { onNavigate: (page: string) => void }) => (
 );
 
 const FEEDBACK_RATING_LABELS = ['', 'Poor', 'Fair', 'Good', 'Very Good', 'Excellent'];
+
+const AboutStory = () => {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <>
+      <p className="text-coffee-600 leading-relaxed">
+        Da Bali Resort is a Balinese-inspired destination resort located in the scenic and sunset capital municipality of Balingasag, Misamis Oriental. Inspired by the beauty and serenity, the resort offers guests a peaceful escape from the fast-paced urban lifestyle and immerses them in a tropical environment centered on nature, relaxation, and Balinese aesthetics.
+      </p>
+      {expanded && (
+        <>
+          <p className="text-coffee-600 leading-relaxed">
+            The name “Da Bali” was creatively derived from the owners’ family name, Dandan combined with Balingasag, the town where the resort is located. The name reflects both the family’s identity and the resort’s vision of bringing a Bali-like experience to Northern Mindanao.
+          </p>
+          <p className="text-coffee-600 leading-relaxed">
+            Surrounded by lush greenery and calming landscapes, Da Bali Resort provides a unique atmosphere where guests can feel transported to another country while remaining close to home. The resort combines natural beauty, cultural inspiration, and modern comfort to create a sanctuary for rest, recreation, and meaningful experiences.
+          </p>
+          <p className="text-coffee-600 leading-relaxed">
+            One of the resort’s most distinctive features is its naturally fresh water sourced directly from the mountains of Balingasag. Unlike heavily treated pool systems, the resort uses clean flowing spring water, providing guests with a refreshing and natural swimming experience that highlights the purity and richness of the local environment.
+          </p>
+        </>
+      )}
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        className="text-[#A3402A] font-bold text-sm hover:underline"
+      >
+        {expanded ? 'Show less' : 'Read our story'}
+      </button>
+    </>
+  );
+};
 
 const FeedbackSection = ({ feedbacks }: { feedbacks: Feedback[] }) => {
   const averageRating = feedbacks.length > 0
@@ -5236,32 +5268,31 @@ export default function App() {
           <div className="space-y-6">
             <p className="text-[#A3402A] font-bold uppercase tracking-widest text-sm mb-2">About Us</p>
             <h2 className="text-4xl font-serif font-bold text-coffee-900">Experience the Serenity of Da Bali Resort</h2>
-            <p className="text-coffee-600 leading-relaxed">
-              A Balinese-inspired resort featuring a flowing spring water swimming pool and unique Salakot Villas for overnight stays in Balingasag, Misamis Oriental. Guests can immerse themselves in a tranquil atmosphere while enjoying the modern comforts of our culturally themed accommodations and amenities.
-            </p>
-            <p className="text-coffee-600 leading-relaxed">
-              Whether you're here for a romantic getaway, a family vacation, or a corporate retreat, our world-class facilities and dedicated staff ensure that every moment of your stay is exceptional.
-            </p>
-            <div className="grid grid-cols-2 gap-6 pt-4">
-              <div className="flex items-start space-x-3">
-                <div className="p-2 bg-coffee-100 rounded-lg text-coffee-900">
-                  <Star className="h-5 w-5" />
-                </div>
-                <div>
-                  <p className="font-bold text-coffee-900">Premium Quality</p>
-                  <p className="text-xs text-coffee-500">Luxury in every detail</p>
-                </div>
+            <AboutStory />
+          </div>
+        </div>
+        <div className="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-2 gap-6 mt-16">
+          <div className="bg-[#FCFBF9] border border-coffee-200 rounded-2xl p-6 shadow-sm">
+            <div className="flex items-center space-x-3 mb-3">
+              <div className="p-2 bg-coffee-100 rounded-lg text-coffee-900">
+                <Eye className="h-5 w-5" />
               </div>
-              <div className="flex items-start space-x-3">
-                <div className="p-2 bg-coffee-100 rounded-lg text-coffee-900">
-                  <Heart className="h-5 w-5" />
-                </div>
-                <div>
-                  <p className="font-bold text-coffee-900">Heartfelt Service</p>
-                  <p className="text-xs text-coffee-500">Guests are our family</p>
-                </div>
-              </div>
+              <p className="font-serif font-bold text-lg text-coffee-900">Vision</p>
             </div>
+            <p className="text-sm text-coffee-600 leading-relaxed">
+              To become one of Northern Mindanao’s premier nature-inspired resorts, recognized for delivering an authentic tropical escape that promotes relaxation, cultural appreciation, sustainability, and exceptional hospitality.
+            </p>
+          </div>
+          <div className="bg-[#FCFBF9] border border-coffee-200 rounded-2xl p-6 shadow-sm">
+            <div className="flex items-center space-x-3 mb-3">
+              <div className="p-2 bg-coffee-100 rounded-lg text-coffee-900">
+                <Target className="h-5 w-5" />
+              </div>
+              <p className="font-serif font-bold text-lg text-coffee-900">Mission</p>
+            </div>
+            <p className="text-sm text-coffee-600 leading-relaxed">
+              Da Bali Resort is committed to providing guests with a refreshing and memorable retreat through excellent service, nature-centered experiences, and a serene Balinese-inspired environment that nurtures comfort, leisure, and connection with nature.
+            </p>
           </div>
         </div>
       </section>
