@@ -19,8 +19,7 @@ import {
   Plus,
   CheckCircle2,
   UserX,
-  LogIn,
-  LogOut
+  KeyRound
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import DatePicker from 'react-datepicker';
@@ -31,10 +30,9 @@ interface DTRDashboardProps {
   staffRecord: StaffRecord[];
   staffMembers: User[];
   currentUser: User;
-  onCheckIn: (userId: number) => Promise<boolean>;
-  onCheckOut: (userId: number) => Promise<boolean>;
   onAddStaff: (firstName: string, lastName: string, workSchedule: string, position: string, role: 'staff' | 'housekeeping') => Promise<void>;
   onEditStaff: (staff: User) => void;
+  onResetPassword?: (staff: User) => void;
   onDeleteStaff: (staffId: number) => Promise<void>;
   fetchAdminData: () => Promise<void>;
   setToastMessage: (msg: { title: string; message: string; type: 'success' | 'error' | 'info' }) => void;
@@ -50,10 +48,9 @@ export const DTRDashboard = ({
   staffRecord, 
   staffMembers, 
   currentUser, 
-  onCheckIn,
-  onCheckOut,
   onAddStaff,
   onEditStaff,
+  onResetPassword,
   onDeleteStaff,
   fetchAdminData,
   setToastMessage,
@@ -76,7 +73,6 @@ export const DTRDashboard = ({
   const [newStaffPosition, setNewStaffPosition] = useState('');
   const [newStaffRole, setNewStaffRole] = useState<'staff' | 'housekeeping'>('staff');
 
-  const [isProcessing, setIsProcessing] = useState(false);
   const [showAddStaffForm, setShowAddStaffForm] = useState(false);
   const [newStaffStartTime, setNewStaffStartTime] = useState('08:00');
   const [newStaffEndTime, setNewStaffEndTime] = useState('17:00');
@@ -130,54 +126,6 @@ export const DTRDashboard = ({
     const recordDate = r.date;
     return recordDate >= historyStartDate && recordDate <= historyEndDate;
   });
-
-  const handleStaffCheckIn = async (userId: number) => {
-    setLocalConfirm({
-      title: 'Confirm Check-In',
-      message: 'Are you sure you want to record a check-in for this staff member?',
-      onConfirm: async () => {
-        setIsProcessing(true);
-        try {
-          const success = await onCheckIn(userId);
-          if (success) {
-            setToastMessage({ title: 'Success', message: 'Checked in successfully!', type: 'success' });
-            fetchAdminData().catch(err => console.error("Failed to refresh admin data after check-in:", err));
-          }
-        } catch (error) {
-          console.error("Check-in error:", error);
-          setToastMessage({ title: 'Error', message: 'Failed to check in. Please try again.', type: 'error' });
-        } finally {
-          setIsProcessing(false);
-          setLocalConfirm(null);
-        }
-      },
-      onCancel: () => setLocalConfirm(null)
-    });
-  };
-
-  const handleStaffCheckOut = async (userId: number) => {
-    setLocalConfirm({
-      title: 'Confirm Check-Out',
-      message: 'Are you sure you want to record a check-out for this staff member?',
-      onConfirm: async () => {
-        setIsProcessing(true);
-        try {
-          const success = await onCheckOut(userId);
-          if (success) {
-            setToastMessage({ title: 'Success', message: 'Checked out successfully!', type: 'success' });
-            fetchAdminData().catch(err => console.error("Failed to refresh admin data after check-out:", err));
-          }
-        } catch (error) {
-          console.error("Check-out error:", error);
-          setToastMessage({ title: 'Error', message: 'Failed to check out. Please try again.', type: 'error' });
-        } finally {
-          setIsProcessing(false);
-          setLocalConfirm(null);
-        }
-      },
-      onCancel: () => setLocalConfirm(null)
-    });
-  };
 
   return (
     <div className="w-full">
@@ -289,29 +237,6 @@ export const DTRDashboard = ({
                           </td>
                           <td className="px-6 py-4 text-right">
                             <div className="flex items-center justify-end gap-2">
-                              {currentUser.role === 'admin' && (
-                                <>
-                                  {!todayRec ? (
-                                    <button 
-                                      onClick={() => handleStaffCheckIn(staff.id)}
-                                      disabled={isProcessing}
-                                      className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-all"
-                                      title="Check In"
-                                    >
-                                      <LogIn className="h-4 w-4" />
-                                    </button>
-                                  ) : !todayRec.check_out && (
-                                    <button 
-                                      onClick={() => handleStaffCheckOut(staff.id)}
-                                      disabled={isProcessing}
-                                      className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-all"
-                                      title="Check Out"
-                                    >
-                                      <LogOut className="h-4 w-4" />
-                                    </button>
-                                  )}
-                                </>
-                              )}
                               <button 
                                 onClick={() => {
                                   setSelectedStaff(staff);
@@ -548,6 +473,15 @@ export const DTRDashboard = ({
                                   >
                                     <Edit className="h-4 w-4" />
                                   </button>
+                                  {onResetPassword && (staff.role === 'staff' || staff.role === 'housekeeping') && (
+                                    <button
+                                      onClick={() => onResetPassword(staff)}
+                                      className="p-2 text-coffee-400 hover:text-amber-600 hover:bg-white rounded-lg transition-all"
+                                      title="Reset Password"
+                                    >
+                                      <KeyRound className="h-4 w-4" />
+                                    </button>
+                                  )}
                                   <button 
                                     onClick={() => onDeleteStaff(staff.id)}
                                     className="p-2 text-coffee-400 hover:text-red-600 hover:bg-white rounded-lg transition-all"

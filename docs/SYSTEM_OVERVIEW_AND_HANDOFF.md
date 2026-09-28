@@ -554,7 +554,7 @@ This section is for honest reporting in Chapter 4 and for **recommendations in C
 - ⚠️ `POST /api/bookings` trusts the **client-sent `totalPrice` and `userId`** for room bookings. Amenity and POS totals *are* computed server-side.
 - Session secret is hard-coded; sessions use the default **in-memory store**, so everyone is logged out on server restart and it doesn't scale beyond one process.
 - The default admin password `admin123` is seeded.
-- Staff created through "Add Staff" get an auto-generated username (`staff_<first>_<last>_<timestamp>`) and the fixed password `temporary_password`. There's no UI flow to hand over or change these credentials.
+- Staff created through "Add Staff" get an auto-generated username (`staff_<first>_<last>_<timestamp>`) and the fixed password `12345678`. There's no UI flow to hand over or change these credentials.
 
 ### Functional / data
 - **Payment verification is manual.** There's no GCash/BPI API integration, and the payment QR codes shown in the booking modals are **placeholder URLs**.

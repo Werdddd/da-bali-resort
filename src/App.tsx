@@ -74,6 +74,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import { User, Room, Booking, Analytics, Amenity, Feedback, StaffRecord, AmenityBooking, HeroBanner } from './types';
 import { AMENITY_OPTIONS } from './amenityOptions';
 import { DTRDashboard } from './components/DTRDashboard';
+import { TimeClockCard } from './components/TimeClockCard';
 import { TimePickerModal } from './components/TimePickerModal';
 import { HousekeepingDashboard } from './components/HousekeepingDashboard';
 import { AnalyticsDashboard } from './components/AnalyticsDashboard';
@@ -3227,6 +3228,8 @@ export default function App() {
   const [editingStaff, setEditingStaff] = useState<User | null>(null);
   const [showEditStaffModal, setShowEditStaffModal] = useState(false);
   const [showAddStaffModal, setShowAddStaffModal] = useState(false);
+  // Login credentials for a newly created / reset staff account, shown to the admin once.
+  const [staffCredentials, setStaffCredentials] = useState<{ heading: string; name: string; role: string; username: string; password: string } | null>(null);
   // The stay the guest is currently reviewing (null = feedback modal closed).
   const [feedbackBooking, setFeedbackBooking] = useState<Booking | null>(null);
   const [myFeedbacks, setMyFeedbacks] = useState<Feedback[]>([]);
@@ -3235,7 +3238,6 @@ export default function App() {
   const [hasLoadedMyFeedbacks, setHasLoadedMyFeedbacks] = useState(false);
   const [isSubmittingFeedback, setIsSubmittingFeedback] = useState(false);
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
-  const [isCheckingIn, setIsCheckingIn] = useState(false);
   const [feedbackForm, setFeedbackForm] = useState({ rating: 5, comment: '' });
   const [proofFile, setProofFile] = useState<string | null>(null);
   const [adminActiveTab, setAdminActiveTab] = useState<'overview' | 'analytics' | 'reservations' | 'rooms' | 'amenities' | 'dtr' | 'payments' | 'slideshow' | 'staff-records' | 'messages' | 'housekeeping' | 'audit-logs' | 'faq-chatbot' | 'feedback' | 'pos'>('overview');
@@ -3709,7 +3711,7 @@ export default function App() {
           // Initializing session - ensure booking state is fresh
           resetBookingState();
           resetAmenityBookingState();
-          if (userData.role === 'admin' || userData.role === 'staff') {
+          if (userData.role === 'admin' || userData.role === 'staff' || userData.role === 'housekeeping') {
             setPage('admin-dashboard');
           } else {
             setPage('guest-dashboard');
@@ -4128,65 +4130,6 @@ export default function App() {
     }
   };
 
-  const handleCheckIn = async (userId?: number) => {
-    if (!user && !userId) return false;
-    setIsCheckingIn(true);
-    try {
-      const now = new Date();
-      const res = await fetch('/api/staff-dtr/check-in', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user_id: userId || user?.id,
-          date: format(now, 'yyyy-MM-dd'),
-          check_in: now.toLocaleTimeString(),
-          status: 'present'
-        })
-      });
-      if (res.ok) {
-        fetchAdminData().catch(console.error);
-        return true;
-      } else {
-        const err = await res.json();
-        setToastMessage({ title: 'Error', message: err.error || 'Failed to check in', type: 'error' });
-      }
-      return false;
-    } catch (e) { 
-      console.error(e); 
-      return false;
-    }
-    finally { setIsCheckingIn(false); }
-  };
-
-  const handleCheckOut = async (userId?: number) => {
-    if (!user && !userId) return false;
-    setIsCheckingIn(true);
-    try {
-      const now = new Date();
-      const res = await fetch('/api/staff-dtr/check-out', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user_id: userId || user?.id,
-          date: format(now, 'yyyy-MM-dd'),
-          check_out: now.toLocaleTimeString()
-        })
-      });
-      if (res.ok) {
-        fetchAdminData().catch(console.error);
-        return true;
-      } else {
-        const err = await res.json();
-        setToastMessage({ title: 'Error', message: err.error || 'Failed to check out', type: 'error' });
-      }
-      return false;
-    } catch (e) { 
-      console.error(e); 
-      return false;
-    }
-    finally { setIsCheckingIn(false); }
-  };
-
   const handleCreateStaff = async (firstName: string, lastName: string, workSchedule: string, position: string, role: 'staff' | 'housekeeping' = 'staff') => {
     try {
       const res = await fetch('/api/staff/create-manual', {
@@ -4198,19 +4141,57 @@ export default function App() {
         },
         body: JSON.stringify({ firstName, lastName, workSchedule, position, role })
       });
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
         setShowAddStaffModal(false);
         await fetchAdminData();
         setAdminActiveTab('staff-records');
         setStaffRecordsTab('management');
-        setToastMessage({ title: 'Success', message: 'Staff added successfully.', type: 'success' });
+        setStaffCredentials({
+          heading: 'Staff Account Created',
+          name: `${data.first_name} ${data.last_name}`,
+          role: data.role,
+          username: data.username,
+          password: data.temporaryPassword
+        });
       } else {
-        setToastMessage({ title: 'Error', message: 'Failed to add staff', type: 'error' });
+        setToastMessage({ title: 'Error', message: data.error || 'Failed to add staff', type: 'error' });
       }
     } catch (e) {
       console.error(e);
       setToastMessage({ title: 'Error', message: 'An error occurred', type: 'error' });
     }
+  };
+
+  const handleResetStaffPassword = (staff: User) => {
+    setConfirmDialog({
+      title: 'Reset Password',
+      message: `Generate a new password for ${staff.first_name} ${staff.last_name}? Their current password will stop working immediately.`,
+      onConfirm: async () => {
+        try {
+          const res = await fetch(`/api/staff/${staff.id}/reset-password`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok) {
+            setStaffCredentials({
+              heading: 'Password Reset',
+              name: `${data.first_name} ${data.last_name}`,
+              role: data.role,
+              username: data.username,
+              password: data.temporaryPassword
+            });
+          } else {
+            setToastMessage({ title: 'Error', message: data.error || 'Failed to reset password.', type: 'error' });
+          }
+        } catch (e) {
+          console.error(e);
+          setToastMessage({ title: 'Error', message: 'An error occurred.', type: 'error' });
+        }
+      },
+      onCancel: () => {}
+    });
   };
 
   const handleUpdateStaff = async (id: number, firstName: string, lastName: string, schedule: string, position: string) => {
@@ -4568,9 +4549,9 @@ export default function App() {
         resetBookingState();
         resetAmenityBookingState();
         
-        if (data.role === 'admin' || data.role === 'staff') {
+        if (data.role === 'admin' || data.role === 'staff' || data.role === 'housekeeping') {
           setPage('admin-dashboard');
-          setAdminActiveTab('overview');
+          setAdminActiveTab(data.role === 'housekeeping' ? 'housekeeping' : data.role === 'staff' ? 'staff-records' : 'overview');
           fetchAdminData().catch(console.error);
         } else {
           setPage('guest-dashboard');
@@ -7198,6 +7179,14 @@ export default function App() {
                 </div>
               )}
 
+              {(user?.role === 'staff' || user?.role === 'housekeeping') && (
+                <TimeClockCard
+                  user={user}
+                  onChange={() => { if (user.role === 'staff') fetchAdminData().catch(console.error); }}
+                  setToastMessage={setToastMessage}
+                />
+              )}
+
               <div className="flex-1 flex flex-col">
                 <AnimatePresence mode="wait">
                   {adminActiveTab === 'staff-records' && (
@@ -7256,10 +7245,9 @@ export default function App() {
                         staffRecord={staffRecord}
                         staffMembers={staffMembers}
                         currentUser={user!}
-                        onCheckIn={(id) => handleCheckIn(id)}
-                        onCheckOut={(id) => handleCheckOut(id)}
                         onAddStaff={handleCreateStaff}
                         onEditStaff={setEditingScheduleRecord}
+                        onResetPassword={handleResetStaffPassword}
                         onDeleteStaff={async (id) => {
                           setConfirmDialog({
                             title: 'Delete Staff',
@@ -9163,6 +9151,49 @@ export default function App() {
               <X size={14} />
             </button>
           </div>
+        </div>
+      )}
+
+      {staffCredentials && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[600] flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl p-6"
+          >
+            <h3 className="text-xl font-serif font-bold text-coffee-900 mb-1">{staffCredentials.heading}</h3>
+            <p className="text-sm text-coffee-600 mb-4">
+              Login details for <span className="font-bold">{staffCredentials.name}</span> ({staffCredentials.role === 'housekeeping' ? 'Housekeeping' : 'Staff'}).
+            </p>
+            <div className="space-y-2 mb-4">
+              {[['Username', staffCredentials.username], ['Password', staffCredentials.password]].map(([label, value]) => (
+                <div key={label} className="flex items-center justify-between gap-3 bg-coffee-50 border border-coffee-100 rounded-xl px-4 py-2.5">
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-bold text-coffee-400 uppercase tracking-widest">{label}</p>
+                    <p className="font-mono text-sm text-coffee-900 break-all select-all">{value}</p>
+                  </div>
+                  <button
+                    onClick={() => navigator.clipboard?.writeText(value).then(
+                      () => setToastMessage({ title: 'Copied', message: `${label} copied to clipboard.`, type: 'info' }),
+                      () => {}
+                    )}
+                    className="text-xs font-bold text-[#A3402A] hover:underline shrink-0"
+                  >
+                    Copy
+                  </button>
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mb-5">
+              This password is shown only once. Share it with the employee now. You can generate a new one later with "Reset Password".
+            </p>
+            <button
+              onClick={() => setStaffCredentials(null)}
+              className="w-full py-2.5 rounded-xl font-bold text-white bg-[#A3402A] hover:bg-[#8B3624] transition-colors shadow-md text-sm"
+            >
+              Done
+            </button>
+          </motion.div>
         </div>
       )}
 

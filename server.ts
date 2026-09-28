@@ -3195,7 +3195,7 @@ async function startServer() {
     }
   });
 
-  app.get("/api/attendance/history/:userId", (req, res) => {
+  app.get("/api/attendance/history/:userId", isStaffOrAdmin, (req, res) => {
     try {
       const history = db.prepare("SELECT * FROM staff_dtr WHERE user_id = ? ORDER BY id DESC").all(req.params.userId);
       res.json(history);
@@ -3333,8 +3333,37 @@ async function startServer() {
     }
   });
 
+  // Employees clock themselves in/out: the account comes from the session and the date/time
+  // from the server clock, so nobody can log time for someone else or backdate an entry.
+  const getClockUser = (req: express.Request) => {
+    const { userId, userRole } = getAuthContext(req);
+    return userId && (userRole === 'staff' || userRole === 'housekeeping') ? userId : null;
+  };
+
+  app.get("/api/staff-dtr/me", (req, res) => {
+    const user_id = getClockUser(req);
+    if (!user_id) {
+      return res.status(403).json({ error: "Only staff and housekeeping accounts have a time clock." });
+    }
+    try {
+      const today = format(new Date(), 'yyyy-MM-dd');
+      const record = db.prepare("SELECT * FROM staff_dtr WHERE user_id = ? AND date = ? ORDER BY id DESC").get(user_id, today) || null;
+      const recent = db.prepare("SELECT * FROM staff_dtr WHERE user_id = ? ORDER BY date DESC, id DESC LIMIT 7").all(user_id);
+      res.json({ today, record, recent });
+    } catch (e) {
+      console.error("GET /api/staff-dtr/me failed:", e);
+      res.status(500).json({ error: "Failed to fetch attendance" });
+    }
+  });
+
   app.post("/api/staff-dtr/check-in", (req, res) => {
-    const { user_id, date, check_in } = req.body;
+    const user_id = getClockUser(req);
+    if (!user_id) {
+      return res.status(403).json({ error: "Only staff and housekeeping accounts can time in." });
+    }
+    const now = new Date();
+    const date = format(now, 'yyyy-MM-dd');
+    const check_in = format(now, 'h:mm:ss a');
     try {
       const existing = db.prepare("SELECT id FROM staff_dtr WHERE user_id = ? AND date = ?").get(user_id, date);
       if (existing) {
@@ -3371,14 +3400,21 @@ async function startServer() {
 
       db.prepare("INSERT INTO staff_dtr (user_id, date, check_in, status) VALUES (?, ?, ?, ?)").run(user_id, date, check_in, status);
       broadcast({ type: 'DTR_UPDATED' });
-      res.json({ success: true, status });
+      res.json({ success: true, status, check_in });
     } catch (e) {
+      console.error("POST /api/staff-dtr/check-in failed:", e);
       res.status(400).json({ error: "Failed to check in" });
     }
   });
 
   app.post("/api/staff-dtr/check-out", (req, res) => {
-    const { user_id, date, check_out } = req.body;
+    const user_id = getClockUser(req);
+    if (!user_id) {
+      return res.status(403).json({ error: "Only staff and housekeeping accounts can time out." });
+    }
+    const now = new Date();
+    const date = format(now, 'yyyy-MM-dd');
+    const check_out = format(now, 'h:mm:ss a');
     try {
       const record = db.prepare("SELECT id, check_out FROM staff_dtr WHERE user_id = ? AND date = ? ORDER BY id DESC").get(user_id, date) as { id: number, check_out: string | null } | undefined;
       if (!record) {
@@ -3390,8 +3426,9 @@ async function startServer() {
 
       db.prepare("UPDATE staff_dtr SET check_out = ? WHERE id = ?").run(check_out, record.id);
       broadcast({ type: 'DTR_UPDATED' });
-      res.json({ success: true });
+      res.json({ success: true, check_out });
     } catch (e) {
+      console.error("POST /api/staff-dtr/check-out failed:", e);
       res.status(400).json({ error: "Failed to check out" });
     }
   });
@@ -3437,10 +3474,18 @@ async function startServer() {
   app.delete("/api/users/:id", isAdmin, (req, res) => {
     try {
       const existing = db.prepare("SELECT first_name, last_name, role FROM users WHERE id = ?").get(req.params.id) as any;
-      db.prepare("DELETE FROM staff_dtr WHERE user_id = ?").run(req.params.id);
-      db.prepare("DELETE FROM messages WHERE sender_id = ? OR receiver_id = ?").run(req.params.id, req.params.id);
-      // Optional: don't delete bookings if it's a real user, but mostly for staff.
-      db.prepare("DELETE FROM users WHERE id = ?").run(req.params.id);
+      db.transaction((id: string) => {
+        db.prepare("DELETE FROM staff_dtr WHERE user_id = ?").run(id);
+        db.prepare("DELETE FROM messages WHERE sender_id = ? OR receiver_id = ?").run(id, id);
+        // Keep work history (housekeeping, audit, POS) but detach it from the deleted account;
+        // otherwise the users foreign keys block the delete. Audit logs keep actor_name.
+        db.prepare("UPDATE housekeeping_logs SET staff_id = NULL WHERE staff_id = ?").run(id);
+        db.prepare("UPDATE audit_logs SET actor_id = NULL WHERE actor_id = ?").run(id);
+        db.prepare("UPDATE pos_transactions SET cashier_id = NULL WHERE cashier_id = ?").run(id);
+        db.prepare("UPDATE pos_transactions SET voided_by = NULL WHERE voided_by = ?").run(id);
+        // Optional: don't delete bookings if it's a real user, but mostly for staff.
+        db.prepare("DELETE FROM users WHERE id = ?").run(id);
+      })(req.params.id);
       const label = existing ? `${existing.first_name || ''} ${existing.last_name || ''}`.trim() : `User #${req.params.id}`;
       logAuditAction(req, 'user_deleted', 'user', req.params.id, label || `User #${req.params.id}`, { role: existing?.role });
       res.json({ success: true });
@@ -4136,20 +4181,64 @@ async function startServer() {
     }
   });
 
+  // Lowercase ASCII letters/digits only, e.g. "Dela Cruz" -> "delacruz", "Peña" -> "pena".
+  const cleanNamePart = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+  // Initial staff password: first name + last name + a random 2-digit number (e.g. "juandelacruz47"),
+  // so employees can remember it. Admins can issue a new one with Reset Password.
+  const generateStaffPassword = (firstName: string, lastName: string) => {
+    const base = cleanNamePart(firstName) + cleanNamePart(lastName) || "staff";
+    return `${base}${crypto.randomInt(10, 100)}`;
+  };
+
+  // Login username in the form "first.last", with a numeric suffix when that name is already taken.
+  const generateStaffUsername = (firstName: string, lastName: string) => {
+    const base = [cleanNamePart(firstName), cleanNamePart(lastName)].filter(Boolean).join(".") || "staff";
+    const exists = db.prepare("SELECT 1 FROM users WHERE username = ?");
+    let username = base;
+    for (let n = 2; exists.get(username); n++) username = `${base}${n}`;
+    return username;
+  };
+
   app.post("/api/staff/create-manual", isAdmin, (req, res) => {
-    const { firstName, lastName, workSchedule, position, role } = req.body;
+    const { workSchedule, position, role } = req.body;
+    const firstName = typeof req.body.firstName === 'string' ? req.body.firstName.trim() : '';
+    const lastName = typeof req.body.lastName === 'string' ? req.body.lastName.trim() : '';
+    if (!firstName || !lastName) {
+      return res.status(400).json({ error: "First and last name are required" });
+    }
     // Only 'staff' and 'housekeeping' can be assigned here; admin accounts are never created via this endpoint.
     const assignedRole = role === 'housekeeping' ? 'housekeeping' : 'staff';
     try {
-      // Create a dummy username and password for manually added staff
-      const username = `staff_${firstName.toLowerCase()}_${lastName.toLowerCase()}_${Date.now()}`;
-      const password = bcrypt.hashSync("temporary_password", 10);
-      const info = db.prepare("INSERT INTO users (username, password, first_name, last_name, role, schedule, position) VALUES (?, ?, ?, ?, ?, ?, ?)").run(username, password, firstName, lastName, assignedRole, workSchedule, position || (assignedRole === 'housekeeping' ? 'Housekeeping' : 'Staff'));
-      const user = db.prepare("SELECT id, username, first_name, last_name, role, schedule, position FROM users WHERE id = ?").get(info.lastInsertRowid);
-      logAuditAction(req, 'staff_created', 'user', info.lastInsertRowid as number, `${firstName} ${lastName}`, { role: assignedRole, position });
-      res.json(user);
+      const username = generateStaffUsername(firstName, lastName);
+      const temporaryPassword = generateStaffPassword(firstName, lastName);
+      const password = bcrypt.hashSync(temporaryPassword, 10);
+      const info = db.prepare("INSERT INTO users (username, password, first_name, last_name, role, schedule, position, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'active')").run(username, password, firstName, lastName, assignedRole, workSchedule, position || (assignedRole === 'housekeeping' ? 'Housekeeping' : 'Staff'));
+      const user = db.prepare("SELECT id, username, first_name, last_name, role, schedule, position FROM users WHERE id = ?").get(info.lastInsertRowid) as any;
+      logAuditAction(req, 'staff_created', 'user', info.lastInsertRowid as number, `${firstName} ${lastName}`, { role: assignedRole, position, username });
+      // The plaintext password is returned exactly once so the admin can hand it to the employee.
+      res.json({ ...user, temporaryPassword });
     } catch (e) {
+      console.error("POST /api/staff/create-manual failed:", e);
       res.status(400).json({ error: "Failed to create staff member" });
+    }
+  });
+
+  app.post("/api/staff/:id/reset-password", isAdmin, (req, res) => {
+    const { id } = req.params;
+    try {
+      const target = db.prepare("SELECT id, username, first_name, last_name, role FROM users WHERE id = ?").get(id) as any;
+      if (!target || (target.role !== 'staff' && target.role !== 'housekeeping')) {
+        return res.status(404).json({ error: "Staff account not found" });
+      }
+      const temporaryPassword = generateStaffPassword(target.first_name || '', target.last_name || '');
+      db.prepare("UPDATE users SET password = ?, reset_token = NULL, reset_token_expiry = NULL WHERE id = ?")
+        .run(bcrypt.hashSync(temporaryPassword, 10), id);
+      logAuditAction(req, 'staff_password_reset', 'user', id, `${target.first_name} ${target.last_name}`, { username: target.username });
+      res.json({ ...target, temporaryPassword });
+    } catch (e) {
+      console.error("POST /api/staff/:id/reset-password failed:", e);
+      res.status(500).json({ error: "Failed to reset password" });
     }
   });
 
