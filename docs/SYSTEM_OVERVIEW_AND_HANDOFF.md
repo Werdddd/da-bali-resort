@@ -1,6 +1,7 @@
 # Da Bali Resort Management System: System Overview & Handoff
 
-> **Snapshot date:** September 25, 2026 · **Branch:** `main` · **Latest commit:** `61cbbbb Feat: POS workflow`
+> **Snapshot date:** September 29, 2026 · **Branch:** `main` · **Latest commit:** `d6f64b7 Update: room/amenities photos`
+> **Changes since the previous snapshot (Sep 25, `61cbbbb`):** About Us section (story, vision, mission) · self-service staff time clock · auto-generated staff credentials + admin password reset · guest feedback now *required* before front-desk checkout · real room/amenity photos loaded from folders · support-chat message deletion removed · several access-control fixes (DTR endpoints, safe user deletion) · page title fixed.
 > **Purpose:** A single reference describing what the system *currently* does, for use when revising Chapters 1–3 and writing Chapters 4–5 of the capstone paper. Everything here is taken from the source code as of the snapshot date. Where the paper should describe something differently (for example, a planned feature), say so explicitly in the paper instead of relying on this doc.
 
 ---
@@ -32,15 +33,15 @@
 
 **Da Bali Resort** is located in Rosario, Balingasag, Misamis Oriental. The system is a web-based resort management and reservation platform that combines:
 
-- A **public guest-facing website**: landing page with an admin-managed hero slideshow, room and amenity catalogs, guest reviews, a "Find Us" map, and an FAQ chatbot.
+- A **public guest-facing website**: landing page with an admin-managed hero slideshow, an About Us section (resort story, vision, and mission), room and amenity catalogs with real resort photos, guest reviews, a "Find Us" map, and an FAQ chatbot.
 - **Online reservations** for rooms (accommodations) and amenities. Guests upload a proof of payment (GCash or BPI), and staff verify it manually.
 - An **admin/staff back office** with 15 modules: dashboard overview, analytics, reservations, payments, front-desk POS, room and amenity management, slideshow management, staff records and DTR, housekeeping, guest feedback moderation, audit logs, FAQ chatbot management, and support chat.
 
 | Metric | Value |
 |---|---|
-| Server code (`server.ts`) | ~4,355 lines, 95 REST endpoints |
+| Server code (`server.ts`) | ~4,400 lines, 96 REST endpoints |
 | Frontend main file (`src/App.tsx`) | ~10,240 lines |
-| Frontend module components (`src/components/`) | 11 files, ~3,650 lines |
+| Frontend module components (`src/components/`) | 12 files, ~3,720 lines |
 | Database tables | 17 |
 | User roles | 4 (guest, staff, housekeeping, admin) |
 | Rooms seeded | 6 (4 Salakot Standard, 2 Bubu Family Suites) |
@@ -53,11 +54,11 @@
 | Role | How the account is created | Lands on | Can access |
 |---|---|---|---|
 | **Guest** | Self-registration (Sign Up) | Guest Dashboard | Book rooms and amenities, upload proof of payment, pay balances, view and download invoices, view check-in QR code, rate a stay, support chat with staff, FAQ chatbot, edit profile |
-| **Staff** (front desk) | Admin → Staff Records → Add Staff | Admin Dashboard (restricted) | **Front Desk POS**, **Staff Records/DTR**, **Housekeeping**, **Support Chat** |
-| **Housekeeping** | Admin → Add Staff (role = housekeeping) | Admin Dashboard (restricted) | **Housekeeping** module only |
-| **Admin** | Seeded on first run (`admin` / `admin123`) | Admin Dashboard | All 15 modules, plus admin-only actions (voiding POS sales, deleting users, editing FAQs, and so on) |
+| **Staff** (front desk) | Admin → Staff Records → Add Staff (username and password auto-generated, see §5.10) | Admin Dashboard (restricted), opens on **Staff Records** | **Front Desk POS**, **Staff Records/DTR**, **Housekeeping**, **Support Chat**, plus their own **Time Clock** |
+| **Housekeeping** | Admin → Add Staff (role = housekeeping) | Admin Dashboard (restricted), opens on **Housekeeping** | **Housekeeping** module, plus their own **Time Clock** |
+| **Admin** | Seeded on first run (`admin` / `admin123`) | Admin Dashboard, opens on **Overview** | All 15 modules, plus admin-only actions (voiding POS sales, deleting users, resetting staff passwords, editing FAQs, and so on) |
 
-Role-based menu gating is defined in [src/App.tsx:7078-7091](../src/App.tsx#L7078-L7091) and enforced server-side by three middlewares: `isAdmin`, `isStaffOrAdmin`, and `isHousekeepingStaff` ([server.ts:951-1050](../server.ts#L951-L1050)).
+Role-based menu gating is defined in [src/App.tsx:7086-7101](../src/App.tsx#L7086-L7101) and enforced server-side by three middlewares: `isAdmin`, `isStaffOrAdmin`, and `isHousekeepingStaff` ([server.ts:929-1028](../server.ts#L929-L1028)).
 
 **Admin sidebar modules** (label → roles):
 
@@ -77,6 +78,8 @@ Role-based menu gating is defined in [src/App.tsx:7078-7091](../src/App.tsx#L707
 | Audit Logs | admin |
 | FAQ Chatbot | admin |
 | Support Chat | admin, staff |
+
+**Staff and housekeeping** also see a **Time Clock card** at the top of every back-office screen, which they use to time themselves in and out (§5.10).
 
 **Guest dashboard tabs:** Overview, My Reservations (Accommodations / Amenities), My Profile.
 
@@ -168,8 +171,13 @@ src/components/
   POSDashboard.tsx             Front-desk point of sale
   ResortChatWidget.tsx         Bottom-right widget (FAQ bot + support chat)
   StaffChatPanel.tsx           Guest ↔ staff support chat
+  TimeClockCard.tsx            Self-service time in/out for staff & housekeeping
   TimePickerModal.tsx          Time picker
+src/ROOMS/<type>/<room>/       Room photos, one folder per room (first file = cover)
+src/AMENITIES/<amenity>/       Amenity photos, one folder per amenity (first file = cover)
 ```
+
+**Photo folders:** room and amenity galleries come from `src/ROOMS` and `src/AMENITIES`. Files in each folder are sorted naturally (`photo2` before `photo10`), and the first file becomes the cover photo. On startup the server syncs each room's gallery with its folder. It updates an amenity's gallery only if the amenity still uses its original default photo, so any images an admin sets later are kept. The landing-page amenity cards load the same folders on the client through Vite's `import.meta.glob`.
 
 ---
 
@@ -177,8 +185,11 @@ src/components/
 
 ### 5.1 Public Website
 - **Hero slideshow:** admin-managed banners (image or video), auto-advancing every 10 s, with a "Book Your Stay" button on the first slide. See [§17](#17-protected-settings-hero-slideshow).
-- **Accommodations** catalog with image sliders, capacity, beds, and price per night.
-- **Amenities** catalog with markdown descriptions, price menus, and location.
+- **About Us:** the resort's story, with a "Read our story" toggle that expands it. The name "Da Bali" combines the owners' family name, *Dandan*, with *Balingasag*. The story also covers the Balinese-inspired setting and the pool's fresh spring water from the Balingasag mountains. It's followed by **Vision** and **Mission** cards.
+  - *Vision:* to become one of Northern Mindanao's premier nature-inspired resorts, known for an authentic tropical escape.
+  - *Mission:* a refreshing, memorable retreat through excellent service, nature-centered experiences, and a serene Balinese-inspired environment.
+- **Accommodations** catalog with image sliders (real photos per room), capacity, beds, and price per night.
+- **Amenities** catalog with markdown descriptions, price menus, location, and real photo galleries.
 - **Guest reviews** section (only non-hidden reviews).
 - **Footer** with contact details and a map.
 - **Chat widget** (bottom-right): the FAQ assistant for everyone, plus Support Chat for signed-in guests.
@@ -195,6 +206,7 @@ src/components/
 - The guest can **pay the remaining balance** later from the dashboard (another proof upload).
 - Downloadable **PDF invoice**.
 - **Check-in requires the booking to be Fully Paid** (enforced server-side).
+- **Check-out requires the guest's feedback** for bookings made from a guest account (enforced server-side and in the UI). Until the guest submits a review, the front-desk button reads **"Awaiting Feedback"** and is disabled. Walk-in bookings have no guest account, so they're exempt. See §5.12.
 - **Stay extension check** (front desk): computes the buffer between this checkout (12:00 PM) and the next guest's check-in (2:00 PM). ≥3 h means an extension is possible. Otherwise it's flagged as tight or declined.
 
 ### 5.4 Amenity Reservation
@@ -213,7 +225,7 @@ src/components/
 - **Walk-in room booking** (front desk): created as confirmed and Fully Paid, with the method recorded as "Walk-in".
 - CSV exports for bookings and payments, filterable by date range.
 
-### 5.6 Front Desk POS (newest module, Sep 25)
+### 5.6 Front Desk POS (Sep 25)
 - For **walk-in pool entrance fees** (Adult ₱90, Child ₱60) and **rentals** (cottages and venue packages). Food and drink are intentionally excluded.
 - Payment: **Cash** (amount tendered and change computed; must cover the total), **GCash**, or **BPI** (reference number required).
 - Prices always come from the shared menu, never from the client.
@@ -240,9 +252,18 @@ src/components/
 
 ### 5.10 Staff Records & DTR (Daily Time Record)
 - Staff directory; add, edit, or delete staff (role: staff or housekeeping, position, work schedule).
-- **Time in / time out** per day. **Late detection:** a time-in more than **15 minutes** after the scheduled start is marked `late`.
+- **Auto-generated login credentials** (admin → Add Staff):
+  - **Username:** `first.last` in lowercase, with accents and spaces removed (e.g., "Juan Dela Cruz" becomes `juan.delacruz`). A number is added if the name is already taken (`juan.delacruz2`).
+  - **Initial password:** first name + last name + a random two-digit number (e.g., `juandelacruz47`), so it's easy for the employee to remember. It's stored as a bcrypt hash.
+  - A **credentials dialog** shows the username and password **once**, with Copy buttons, so the admin can hand them to the employee.
+- **Reset Password** (admin only, key icon in the directory): generates a new password in the same format, shows it once, and immediately invalidates the old one. The action is audit-logged (`staff_password_reset`).
+- **Self-service Time Clock** (`TimeClockCard`): staff and housekeeping accounts time **themselves** in and out from a card at the top of their dashboard. The card shows a live clock, today's time in/out and status, and the last 7 records.
+  - The **server** takes the account from the session and the date and time from its own clock. Nobody can log time for another person or backdate an entry. The admin can no longer time staff in/out manually.
+  - One time-in and one time-out per day.
+- **Late detection:** a time-in more than **15 minutes** after the scheduled start is marked `late`.
 - Attendance history with filters (month, year, status, search) and pagination.
 - CSV export of attendance by date range.
+- **Deleting a staff account** keeps their work history. Their DTR records and messages are removed, while their housekeeping logs, audit logs, and POS sales are kept but detached from the account. Everything runs in one DB transaction.
 
 ### 5.11 Analytics (admin)
 - KPI cards: total revenue, this month's revenue, bookings, amenity bookings, registered guests, rooms, and **occupancy rate** for the current month.
@@ -253,12 +274,12 @@ src/components/
 
 ### 5.12 Guest Feedback
 - A guest can rate a stay **1–5 stars with a comment** (max 1,000 characters) once they're **checked-in or completed**. There's **one review per booking**, enforced by a unique index.
-- The guest is prompted to review before checkout, and the post-checkout email reminds them.
+- **Feedback is mandatory before front-desk checkout** for guest-account room bookings. The server rejects the checkout ("Guest cannot be checked out until they submit feedback…") and the Check Out button is disabled with an "Awaiting Feedback" label. Walk-ins are exempt. The post-checkout email still asks for a review if none exists (for example, stays closed by the hourly auto-complete job).
 - Admin moderation: **hide/unhide** (hidden reviews stay off the landing page) or delete. Both are audit-logged.
 
 ### 5.13 FAQ Chatbot (rule-based)
 - Each FAQ entry has a question template, an answer, comma-separated **key phrases**, a category, an active flag, an order, and a **hit count**.
-- **Matching algorithm** ([server.ts:3915-3973](../server.ts#L3915-L3973)):
+- **Matching algorithm** ([server.ts:3920-3978](../server.ts#L3920-L3978)):
   1. Tokenize: lowercase, strip punctuation ("check-in" becomes "check in"), and singularize trailing "s".
   2. Each key phrase found in the message scores its word count, so multi-word phrases outweigh single words.
   3. **Typo tolerance:** single key words of 5 or more letters also match with one edit (insert, delete, or substitute), scoring 0.75.
@@ -271,12 +292,12 @@ src/components/
 
 ### 5.14 Support Chat
 - Guest ↔ resort messaging. All guest threads live in one **shared support inbox**, owned by the admin account and worked by both admin and staff.
-- Unread counts, a heart reaction, and message deletion (own messages only).
+- Unread counts and a heart reaction. **Messages can't be deleted** (the delete feature and its endpoint were removed on Sep 28), so the full conversation stays on record.
 - Polling-based refresh (30–60 s).
 
 ### 5.15 Audit Logs (admin)
 - A persistent record of admin/staff actions: who, role, action, entity, and details (JSON).
-- Logged actions include room, amenity, and FAQ create/update/deactivate; booking and amenity-booking status changes and **payment verification**; notes; archive; cancel; housekeeping status changes; staff create, update, and delete; feedback hide, unhide, and delete; and POS sale, rentals returned, and void.
+- Logged actions include room, amenity, and FAQ create/update/deactivate; booking and amenity-booking status changes and **payment verification**; notes; archive; cancel; housekeeping status changes; staff create, update, delete, and password reset; feedback hide, unhide, and delete; and POS sale, rentals returned, and void.
 - The actor's name is stored at write time, so logs stay readable after an account is deleted. Logs can be filtered by action, entity type, and actor, with pagination.
 
 ### 5.16 Automated Communication
@@ -308,8 +329,9 @@ sequenceDiagram
   Guest->>API: (optional) Pay balance → pending_verification → re-verify
   Note over API: payment_status becomes Fully Paid
   Staff->>API: Check-in (requires Fully Paid) → room occupied
-  Staff->>API: Check-out → Completed → room auto-flagged dirty
-  API--)Guest: Post-checkout email + review prompt
+  Guest->>API: Submit feedback (1–5 stars + comment) from Guest Portal
+  Staff->>API: Check-out (requires feedback) → Completed → room auto-flagged dirty
+  API--)Guest: Post-checkout thank-you email
 ```
 
 ### 6.2 Amenity Reservation
@@ -323,6 +345,9 @@ Guest checked out → room `dirty` (auto) → attendant sets `in_progress` → s
 
 ### 6.5 Password Reset
 Forgot password → email with 1-hour tokenized link → set new password → token cleared.
+
+### 6.6 Staff Onboarding and Attendance
+Admin adds staff (name, role, position, schedule) → server generates username `first.last` and password `firstlast##` → credentials dialog shown once → admin hands them to the employee → employee logs in (lands on Staff Records or Housekeeping) → presses **Time In** on the Time Clock card → server stamps date/time from its own clock and marks `present` or `late` (>15 min) → presses **Time Out** at end of shift → records appear in DTR History and CSV export. Forgotten password → admin **Reset Password** → new password shown once.
 
 ---
 
@@ -340,7 +365,7 @@ stateDiagram-v2
   rejected --> pending_verification: guest re-uploads
   confirmed --> pending_verification: balance payment uploaded
   confirmed --> checked_in: Fully Paid only
-  checked_in --> Completed: front-desk checkout (room → dirty)
+  checked_in --> Completed: front-desk checkout, feedback required (room → dirty)
   confirmed --> completed: auto job, past check-out date
   checked_in --> completed: auto job, past check-out date
   pending --> no_show: auto job, past check-out date
@@ -372,7 +397,7 @@ SQLite, file `resort.db`. The schema is created and migrated on server start wit
 | Table | Purpose | Key columns |
 |---|---|---|
 | `users` | All accounts | id, username (unique), password (bcrypt), first_name, last_name, email (unique), contact_no, address, **role** (guest/staff/housekeeping/admin), schedule, position, status, reset_token, reset_token_expiry |
-| `rooms` | Accommodation units | id, name, type, description, price, capacity, beds, image_url, images (JSON), **status**, last_cleaned_at, housekeeping_notes |
+| `rooms` | Accommodation units | id, name, type, description, price, capacity, beds, image_url (cover), images (JSON gallery, synced from `src/ROOMS`), **status**, last_cleaned_at, housekeeping_notes |
 | `bookings` | Room reservations | id, user_id→users (NULL for walk-ins), room_id→rooms, check_in, check_out, total_price, **status**, payment_method, **payment_status**, qr_code, guests_count, extra_bed, proof_of_payment, transaction_reference, amount_paid, balance_proof_of_payment, balance_transaction_reference, balance_amount_paid, admin_notes, is_archived, walk-in guest fields (first_name, last_name, email, contact_no), created_at |
 | `payments` | Payment ledger for room bookings | id, booking_id→bookings, amount, method, transaction_id, status, created_at |
 | `amenities` | Amenity catalog | id, name, description, icon, image_url, images (JSON), location, price, **stock** (NULL = unlimited), status |
@@ -383,14 +408,14 @@ SQLite, file `resort.db`. The schema is created and migrated on server start wit
 | `feedbacks` | Guest reviews | id, user_id, booking_id (unique), rating 1–5, comment, is_hidden, created_at |
 | `messages` | Support chat | id, sender_id, receiver_id, content, is_read, has_heart, reaction_unread, created_at |
 | `automated_messages` | Sent-email tracker | id, booking_id, type (pre-arrival / post-checkout), sent_at |
-| `staff_dtr` | Attendance | id, user_id, date, check_in, check_out, status (present/late/…) |
+| `staff_dtr` | Attendance | id, user_id, date, check_in, check_out (server-clock times, e.g. `8:05:12 AM`), status (present/late/…) |
 | `housekeeping_logs` | Room status history | id, room_id, staff_id (NULL = system), previous_status, new_status, notes, created_at |
 | `audit_logs` | Admin/staff action trail | id, actor_id, actor_name, actor_role, action, entity_type, entity_id, entity_label, details (JSON), created_at |
 | `faq_entries` | Chatbot knowledge base | id, question, answer, keywords, category, is_active, order_index, hit_count, created_at, updated_at |
 | `faq_unmatched_queries` | Unanswered chatbot questions | id, query, user_id, created_at |
 
 **Main relationships (for the ERD):**
-- users 1—N bookings, amenity_bookings, feedbacks, messages (sender/receiver), staff_dtr, housekeeping_logs, audit_logs, pos_transactions (cashier)
+- users 1—N bookings, amenity_bookings, feedbacks, messages (sender/receiver), staff_dtr, housekeeping_logs, audit_logs, pos_transactions (cashier). *When a user is deleted, their housekeeping_logs.staff_id, audit_logs.actor_id, and pos_transactions.cashier_id / voided_by are set to NULL, so the history survives.*
 - rooms 1—N bookings, housekeeping_logs
 - bookings 1—N payments, automated_messages; bookings 1—0..1 feedbacks
 - amenities 1—N amenity_bookings, pos_transaction_items
@@ -420,12 +445,12 @@ erDiagram
 
 ## 9. API Reference (Summary)
 
-All endpoints are under `/api`. Auth is the session cookie. 🔓 = public, 👤 = signed-in (owner check where noted), 🧑‍💼 = staff/admin, 🧹 = housekeeping/staff/admin, 👑 = admin only.
+All endpoints are under `/api`. Auth is the session cookie. 🔓 = public, 👤 = signed-in (owner check where noted), 🧑‍💼 = staff/admin, 🧹 = housekeeping/staff/admin, ⏱️ = the signed-in staff/housekeeping account only (acts on itself), 👑 = admin only.
 
 | Area | Endpoints |
 |---|---|
 | Auth | 🔓 `POST /auth/register`, `POST /auth/login` (rate-limited), `POST /auth/logout`, `GET /auth/me`, `POST /auth/forgot-password`, `POST /auth/reset-password` (rate-limited) |
-| Users/Staff | `PUT /users/:id`, `PATCH /users/:id`, `PATCH /users/:id/schedule`, 👑 `GET /users`, 👑 `DELETE /users/:id`, 🧑‍💼 `GET /staff`, 🧑‍💼 `GET /staff/all`, 👑 `POST /staff/create-manual`, 👑 `PUT /staff/:id` |
+| Users/Staff | `PUT /users/:id`, `PATCH /users/:id`, `PATCH /users/:id/schedule`, 👑 `GET /users`, 👑 `DELETE /users/:id`, 🧑‍💼 `GET /staff`, 🧑‍💼 `GET /staff/all`, 👑 `POST /staff/create-manual` (returns the generated username + one-time password), 👑 `POST /staff/:id/reset-password`, 👑 `PUT /staff/:id` |
 | Rooms | 🔓 `GET /rooms`, 🔓 `GET /rooms/:id/next-booking`, 👑 `POST/PUT/DELETE /rooms[/:id]` |
 | Housekeeping | 🧹 `GET /housekeeping/rooms`, 🧹 `GET /housekeeping/logs`, 🧹 `PATCH /rooms/:id/housekeeping-status` |
 | Amenities | 🔓 `GET /amenities`, 👑 `POST/PUT/DELETE /amenities[/:id]` |
@@ -435,8 +460,8 @@ All endpoints are under `/api`. Auth is the session cookie. 🔓 = public, 👤 
 | POS | 🧑‍💼 `GET /pos/catalog`, `GET /pos/transactions?date=`, `POST /pos/transactions`, `POST /pos/transactions/:id/return-rentals`, `GET /pos/transactions/:id/receipt`; 👑 `POST /pos/transactions/:id/void` |
 | Feedback | 🔓 `GET /feedbacks`, 👤 `GET /feedbacks/mine`, 👤 `POST /feedbacks`, 👑 `GET /feedbacks/all`, 👑 `PATCH /feedbacks/:id/visibility`, 👑 `DELETE /feedbacks/:id` |
 | Slideshow | 🔓 `GET /slideshow-items`, 👑 `POST /slideshow-items`, 👑 `POST /slideshow-items/:id` (update), 👑 `DELETE /slideshow-items/:id` |
-| DTR | 🧑‍💼 `GET /staff-dtr`, `GET /attendance/history/:userId`, `POST /staff-dtr/check-in`, `POST /staff-dtr/check-out`, 🧑‍💼 `GET /staff-dtr/export`, 👑 `DELETE /staff-dtr/:id` |
-| Messages | `GET /messages/:userId`, `POST /messages`, 👤 `DELETE /messages/:id`, 👤 `PATCH /messages/:id/heart`, 👤 `GET /messages/guest/unread`, 👤 `PATCH /messages/guest/read`, 🧑‍💼 `GET /admin/messages/inbox`, 🧑‍💼 `PATCH /admin/messages/:userId/read` |
+| DTR | 🧑‍💼 `GET /staff-dtr`, 🧑‍💼 `GET /attendance/history/:userId`, ⏱️ `GET /staff-dtr/me`, ⏱️ `POST /staff-dtr/check-in`, ⏱️ `POST /staff-dtr/check-out`, 🧑‍💼 `GET /staff-dtr/export`, 👑 `DELETE /staff-dtr/:id` |
+| Messages | `GET /messages/:userId`, `POST /messages`, 👤 `PATCH /messages/:id/heart`, 👤 `GET /messages/guest/unread`, 👤 `PATCH /messages/guest/read`, 🧑‍💼 `GET /admin/messages/inbox`, 🧑‍💼 `PATCH /admin/messages/:userId/read` |
 | Analytics | 👑 `GET /analytics`, 👑 `GET /analytics/detailed` |
 | Audit | 👑 `GET /audit-logs` |
 | FAQ | 🔓 `GET /faq`, 🔓 `POST /faq/chat`, 👑 `GET /faq/admin`, 👑 `POST/PUT/DELETE /faq[/:id]`, 👑 `GET /faq/unmatched`, 👑 `DELETE /faq/unmatched/:id` |
@@ -454,6 +479,7 @@ Endpoints with no marker have **no server-side auth check**. See [§15](#15-know
 | Room rates (seeded) | Salakot Room 1: ₱3,000 · Rooms 2–4: ₱2,900 · Bubu Suite A/B: ₱6,950 (breakfast included) |
 | Room capacity | Salakot: 2 + 1 extra bed (max 3) · Bubu: up to 8 |
 | Room downpayment | Partial payment allowed; must be **Fully Paid before check-in** |
+| Room check-out | Guest-account bookings need **submitted feedback** before front-desk checkout; walk-ins exempt |
 | Amenity deposit | 50% of total; **100% for Infinity Pool cottages** |
 | Pool entrance | Adult ₱90 · Child (≤5 yrs) ₱60, paid on-site / at POS, excluded from the online total |
 | Cottages | Large Tent ₱2,500 (20 pax) · Gray Tent ₱2,000 (15 pax) · Umbrella ₱500 (8 pax) · Umbrella near pool ₱600 |
@@ -462,7 +488,9 @@ Endpoints with no marker have **no server-side auth check**. See [§15](#15-know
 | Payment channels | GCash (09629724075), BPI transfer; POS also accepts Cash |
 | Stay extension | Allowed if ≥3 h buffer before the next guest's check-in |
 | DTR late threshold | >15 min after scheduled start |
-| Feedback | 1–5 stars, ≤1,000 chars, one per booking, after check-in |
+| DTR entries | Self-service only; time taken from the server clock; one time-in and one time-out per day |
+| Staff username / initial password | `first.last` (numbered if taken) / `firstlast` + random 2 digits, shown once |
+| Feedback | 1–5 stars, ≤1,000 chars, one per booking, after check-in, required before checkout |
 | FAQ match threshold | Score ≥ 0.75 |
 | Login rate limit | 5 failed attempts per account+IP per 15 min; 30 per IP per 15 min |
 | Password reset rate limit | 5 requests/IP/hour; 10 reset attempts/IP/15 min; token valid 1 hour |
@@ -483,19 +511,21 @@ Useful for Chapter 3 (design) and Chapter 4 (security evaluation):
 4. **Brute-force protection:** in-memory rate limiters on login and password reset.
 5. **Anti-enumeration** on forgot-password (same response either way).
 6. **Server-side price computation** for amenities and POS. Client-submitted totals are ignored.
-7. **Server-side business-rule enforcement:** deposit minimum, full payment before check-in, stock checks, Pavilion exclusivity, room housekeeping status.
-8. **Ownership checks** on invoices, amenity-booking payments, feedback, and message deletion.
-9. **Transactional stock updates** in POS (no overselling across terminals).
-10. **Audit trail** of admin/staff actions. POS voids are kept, never deleted.
-11. **Soft deletes** for rooms and amenities (deactivate) and bookings (archive/cancel) preserve history.
-12. **Parameterized SQL** (prepared statements) throughout, which protects against SQL injection.
-13. **Cookie settings:** `Secure` automatically over HTTPS, `SameSite=None` on HTTPS and `Lax` on HTTP.
+7. **Server-side business-rule enforcement:** deposit minimum, full payment before check-in, feedback before checkout, stock checks, Pavilion exclusivity, room housekeeping status.
+8. **Ownership checks** on invoices, amenity-booking payments, and feedback.
+9. **Tamper-proof attendance:** time-in/out uses the session's account and the server clock. Client-sent user IDs, dates, and times are ignored.
+10. **One-time credential display:** generated staff passwords are returned once, never stored in plaintext, and can be rotated by the admin (Reset Password).
+11. **Transactional stock updates** in POS (no overselling across terminals), and transactional user deletion.
+12. **Audit trail** of admin/staff actions. POS voids are kept, never deleted. Support-chat messages can't be deleted.
+13. **Soft deletes** for rooms and amenities (deactivate) and bookings (archive/cancel) preserve history. Deleting a staff account keeps their housekeeping, audit, and POS history.
+14. **Parameterized SQL** (prepared statements) for all user input, which protects against SQL injection.
+15. **Cookie settings:** `Secure` automatically over HTTPS, `SameSite=None` on HTTPS and `Lax` on HTTP.
 
 ---
 
 ## 12. Automated / Scheduled Processes
 
-Run **on server start and every hour** ([server.ts:4202-4318](../server.ts#L4202-L4318)):
+Run **on server start and every hour** ([server.ts:4251-4367](../server.ts#L4251-L4367)):
 
 1. **Booking status auto-update**
    - Room bookings `confirmed`/`checked-in` past their check-out date → `completed`. Rooms left `occupied` → `dirty`.
@@ -505,11 +535,13 @@ Run **on server start and every hour** ([server.ts:4202-4318](../server.ts#L4202
    - Pre-arrival email for confirmed bookings checking in tomorrow.
    - Post-checkout email for bookings with status `Completed`.
 
+Also **on server start** (not hourly): room galleries, and amenity galleries still on their default photos, are re-synced from the `src/ROOMS` and `src/AMENITIES` photo folders (§4).
+
 ---
 
 ## 13. Development Timeline
 
-From git history (17 commits). Useful for describing the development methodology in Chapter 3, for example iterative/Agile sprints.
+From git history (22 commits). Useful for describing the development methodology in Chapter 3, for example iterative/Agile sprints.
 
 | Date (2026) | Milestone |
 |---|---|
@@ -520,6 +552,8 @@ From git history (17 commits). Useful for describing the development methodology
 | Sep 18 | **Audit Logs** |
 | Sep 24 | **FAQ Chatbot**; carousel improvements; unified chatbots into one widget; session fix; footer; "Book Your Stay" button; **security fixes**; staff access to support chat |
 | Sep 25 | **Front Desk POS workflow** |
+| Sep 27 | **About Us section** (resort story, vision, mission) |
+| Sep 28 | **Self-service staff time in/out** with auto-generated staff credentials and password reset; **feedback required before checkout**; support-chat message deletion removed; page title set to "Da Bali Resort"; real room and amenity photos organized into folders |
 
 ---
 
@@ -533,7 +567,8 @@ npm start            # production: node dist/server.cjs
 npm run lint         # type-check (tsc --noEmit)
 ```
 
-- The database `resort.db` is created and seeded automatically on first run: admin account, 6 rooms, 4 amenities, 7 hero banners, and 15 FAQs.
+- The database `resort.db` is created and seeded automatically on first run: admin account, 6 rooms (photos from `src/ROOMS`), 4 amenities, 7 hero banners, and 15 FAQs.
+- **To change room/amenity photos,** replace the files in that room's or amenity's folder under `src/ROOMS` or `src/AMENITIES` and restart the server. The first file (natural sort order) becomes the cover.
 - **Default admin:** `admin` / `admin123`. Change it before any real deployment.
 - **Optional environment variables:** `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS` (without them, emails are only logged to the console), and `APP_URL` (used in password-reset links).
 - Helper scripts in the repo root (`check_rooms.js`, `restore_room.js`, `remove_booking.ts`, `check_admin_bookings.ts`, `test-db.ts`, `test_put.js`) and `dump.sql` are developer utilities, not part of the app.
@@ -548,19 +583,22 @@ This section is for honest reporting in Chapter 4 and for **recommendations in C
 - ⚠️ Several endpoints have **no auth or ownership check**, so a caller who knows an ID could read or change another user's data:
   - `PATCH /api/bookings/:id/status` (any caller can change a room booking's status)
   - `PUT /api/users/:id`, `PATCH /api/users/:id`, `PATCH /api/users/:id/schedule`
-  - `GET /api/bookings/user/:userId`, `GET /api/my-amenity-bookings/:userId`, `GET /api/messages/:userId`, `GET /api/attendance/history/:userId`
-  - `POST /api/messages` (trusts `sender_id` from the body), `POST /api/staff-dtr/check-in` and `/check-out` (trust `user_id` from the body)
+  - `GET /api/bookings/user/:userId`, `GET /api/my-amenity-bookings/:userId`, `GET /api/messages/:userId`
+  - `POST /api/messages` (trusts `sender_id` from the body)
   - `PUT /api/bookings/:id/proof-of-payment` and `/balance-payment` for **room** bookings. The amenity versions do check ownership. The room balance endpoint also lets anyone send `MANUAL_SETTLEMENT`.
 - ⚠️ `POST /api/bookings` trusts the **client-sent `totalPrice` and `userId`** for room bookings. Amenity and POS totals *are* computed server-side.
 - Session secret is hard-coded; sessions use the default **in-memory store**, so everyone is logged out on server restart and it doesn't scale beyond one process.
 - The default admin password `admin123` is seeded.
-- Staff created through "Add Staff" get an auto-generated username (`staff_<first>_<last>_<timestamp>`) and the fixed password `12345678`. There's no UI flow to hand over or change these credentials.
+- Staff initial passwords are easy to guess (name + 2 random digits, only 90 possibilities per person), and employees can't change their own password. Only the admin can reset it. Recommend forcing a password change on first login.
+- *Fixed on Sep 28 (you can report these as improvements):* DTR time-in/out no longer trusts a client-sent `user_id`. `GET /attendance/history/:userId` now requires staff/admin. The message-delete endpoint was removed. Staff accounts now get proper credentials that the admin can see and reset (they previously got a hard-coded placeholder password that was never shown to anyone). Deleting a staff account no longer fails when they have housekeeping, audit, or POS history.
 
 ### Functional / data
 - **Payment verification is manual.** There's no GCash/BPI API integration, and the payment QR codes shown in the booking modals are **placeholder URLs**.
 - Proof-of-payment images are stored **as base64 text inside the database** (request limit 50 MB), which grows the DB quickly.
 - **Amenity stock is a single counter, not per date.** It limits concurrent confirmed bookings, not availability on a specific day. Only the Pavilion has date/time conflict checking.
 - Status casing is inconsistent: the front-desk checkout sets `Completed`, while the hourly job sets `completed`. Post-checkout emails and the auto-dirty room flag only trigger for `Completed`. A confirmed booking that was never checked in is auto-marked `completed` instead of `no-show`, because the completion step runs before the no-show step.
+- The **"feedback before checkout" rule applies only to the front-desk checkout.** The hourly job still auto-completes past-due stays without feedback. If a guest leaves without reviewing, staff can't check them out manually and must wait for the auto-complete job.
+- DTR dates and times use the **server's local clock**. The server must be set to Philippine time (UTC+8) for time-in/out and late detection to be correct.
 - The **6-month revenue trend chart excludes POS sales**, but the headline revenue KPI includes them.
 - The housekeeping "today" and auto-update jobs use the **UTC date** (`toISOString`). In the Philippines (UTC+8), "today" lags between midnight and 8 AM.
 - Emails depend on SMTP configuration. The pre-arrival email body still contains a placeholder ("House Rules: ...").
@@ -572,10 +610,11 @@ This section is for honest reporting in Chapter 4 and for **recommendations in C
 - `src/App.tsx` is a ~10k-line monolith. Most admin views live in it rather than in separate components.
 - SQLite plus a single process means no horizontal scaling. That's appropriate for one resort.
 - Schema migrations are ad-hoc `ALTER TABLE` statements in a `try/catch` on startup.
-- The README and `.env.example` still describe the Google AI Studio template, and the unused `@google/genai` dependency is still listed.
+- The README and `.env.example` still describe the Google AI Studio template, and the unused `@google/genai` dependency is still listed. (The browser tab title was fixed to "Da Bali Resort" on Sep 28.)
+- Old unused photo files (Facebook-exported JPGs and `Gemini_Generated_Image_*.png`) remain in `src/`. Room and amenity galleries no longer use them.
 
 ### Suggested recommendations (Chapter 5)
-1. Close the access-control gaps above, and compute room totals server-side.
+1. Close the access-control gaps above, compute room totals server-side, and force a password change on a staff member's first login.
 2. Integrate a payment gateway (e.g., PayMongo or Xendit for GCash) for automatic verification.
 3. Move uploaded images to file/object storage.
 4. Use a persistent session store and an environment-based secret.
@@ -590,7 +629,7 @@ This section is for honest reporting in Chapter 4 and for **recommendations in C
 ## 16. Paper Mapping: What to Use in Each Chapter
 
 ### Chapter 1: Introduction
-- **Background:** resort operations previously handled manually (walk-ins, phone/Facebook reservations, manual payment checking, paper DTR).
+- **Background:** resort operations previously handled manually (walk-ins, phone/Facebook reservations, manual payment checking, paper DTR). The About Us text in §5.1 (name origin, Balinese-inspired design, mountain spring water, vision and mission) can be reused for the resort profile.
 - **General objective:** a web-based resort management and reservation system for Da Bali Resort.
 - **Specific objectives** can map one-to-one to modules in §5: online reservation with payment proof, amenity reservation with stock, front-desk POS, housekeeping, DTR, analytics, feedback, FAQ chatbot plus support chat, and audit logs.
 - **Scope:** the modules and roles in §2 and §5. **Limitations:** take them from §15. For example, manual payment verification, no payment gateway, web-only, single resort, SQLite, and a rule-based (non-AI) chatbot.
@@ -605,8 +644,8 @@ Topics that match what was built: online hotel/resort reservation systems, e-pay
 - **Development model:** iterative/Agile, supported by the §13 timeline (feature increments every few days).
 - **Architecture diagram:** §4. **Context diagram / DFD:** external entities are Guest, Staff, Housekeeping, Admin, and the Email server.
 - **Use-case diagram:** actors and use cases from §2 and §5.
-- **Activity/sequence diagrams:** §6. **State diagrams:** §7. **ERD and data dictionary:** §8.
-- **Tools:** §3. **Algorithms worth describing:** FAQ matching (§5.13), occupancy computation (§5.11), deposit computation (§5.4), DTR late detection (§5.10), and stay-extension buffer (§5.3).
+- **Activity/sequence diagrams:** §6 (including staff onboarding and attendance, §6.6). **State diagrams:** §7. **ERD and data dictionary:** §8.
+- **Tools:** §3. **Algorithms worth describing:** FAQ matching (§5.13), occupancy computation (§5.11), deposit computation (§5.4), DTR late detection (§5.10), staff username/password generation (§5.10), and stay-extension buffer (§5.3).
 - **Security design:** §11.
 - **Evaluation instrument:** ISO/IEC 25010 is the usual choice (functional suitability, performance efficiency, usability, reliability, security, maintainability), with a Likert-scale survey of guests, staff, and admin respondents.
 
@@ -621,9 +660,11 @@ Suggested structure. The **results must come from your actual testing and survey
    - POS: cash below total is rejected; overselling stock is rejected; void restores stock; staff can't void.
    - Housekeeping: can't mark an occupied room available; checkout auto-flags dirty.
    - Login locks after 5 failed attempts; a staff account can't open admin-only modules/APIs.
-   - Feedback: only after check-in; only one per stay.
+   - Feedback: only after check-in; only one per stay; check-out is blocked ("Awaiting Feedback") until the guest submits it; walk-in checkout isn't blocked.
    - FAQ bot: matches typos ("chekout"), logs unmatched questions.
-   - DTR: time-in >15 min late is marked `late`.
+   - DTR: time-in >15 min late is marked `late`; a second time-in on the same day is rejected; an admin account gets no time clock; the recorded time is the server's, not the device's.
+   - Staff accounts: Add Staff shows a `first.last` username and a one-time password that work at login; a duplicate name gets `first.last2`; Reset Password makes the old password stop working.
+   - Support chat: there is no delete option for messages.
 3. **ISO 25010 survey results:** mean per criterion and verbal interpretation.
 4. **Discussion:** relate the results back to each specific objective, and note the limitations found (§15).
 
@@ -640,16 +681,18 @@ Per the project instructions (`AGENTS.md`), the **hero slideshow settings are to
 
 | Setting | Current value | Location |
 |---|---|---|
-| Auto-advance interval | **10,000 ms (10 s)**, only on the home page, only when there is more than 1 banner | [src/App.tsx:3563-3575](../src/App.tsx#L3563-L3575) |
-| Reset on visiting Home | Returns to slide 0 | [src/App.tsx:3557-3561](../src/App.tsx#L3557-L3561) |
-| Transition | Fade (`opacity 0 → 1`), duration **1 s**, `AnimatePresence mode="wait"` | [src/App.tsx:1243-1251](../src/App.tsx#L1243-L1251) |
-| Text animation | Title delay 0.3 s, description delay 0.5 s, slide up 20 px | [src/App.tsx:1281-1296](../src/App.tsx#L1281-L1296) |
-| Layout | Full-screen (`h-screen`), 50% black overlay; slide 0 centered, others left-aligned | [src/App.tsx:1242](../src/App.tsx#L1242), [:1270](../src/App.tsx#L1270) |
-| Media | Image or video (video autoplay, muted, loop) | [src/App.tsx:1253-1268](../src/App.tsx#L1253-L1268) |
-| Buttons | "Learn More" if `link_url` is set; otherwise "Book Your Stay" on slide 0 only | [src/App.tsx:1297-1315](../src/App.tsx#L1297-L1315) |
-| Controls | Bar indicators (active = wide white), prev/next arrows | [src/App.tsx:1322-1345](../src/App.tsx#L1322-L1345) |
-| Data source | `hero_banners` table via `GET /api/slideshow-items`, ordered by `order_index` then newest. Admin-only edits. | [server.ts:3033-3134](../server.ts#L3033-L3134) |
-| Seeded banners (order) | 0 WELCOME / DA BALI RESORT · 1 Infinity Pool · 2 Fine Dining · 3 Pavilion · 4 Colored Tent/Team Building · 5 Salakot Room · 6 Bubu Room (seeded only when the table is empty) | [server.ts:336-415](../server.ts#L336-L415) |
+| Auto-advance interval | **10,000 ms (10 s)**, only on the home page, only when there is more than 1 banner | [src/App.tsx:3594-3606](../src/App.tsx#L3594-L3606) |
+| Reset on visiting Home | Returns to slide 0 | [src/App.tsx:3588-3592](../src/App.tsx#L3588-L3592) |
+| Transition | Fade (`opacity 0 → 1`), duration **1 s**, `AnimatePresence mode="wait"` | [src/App.tsx:1267-1275](../src/App.tsx#L1267-L1275) |
+| Text animation | Title delay 0.3 s, description delay 0.5 s, slide up 20 px | [src/App.tsx:1297-1320](../src/App.tsx#L1297-L1320) |
+| Layout | Full-screen (`h-screen`), 50% black overlay; slide 0 centered, others left-aligned | [src/App.tsx:1266](../src/App.tsx#L1266), [:1294](../src/App.tsx#L1294) |
+| Media | Image or video (video autoplay, muted, loop) | [src/App.tsx:1277-1293](../src/App.tsx#L1277-L1293) |
+| Buttons | "Learn More" if `link_url` is set; otherwise "Book Your Stay" on slide 0 only | [src/App.tsx:1321-1339](../src/App.tsx#L1321-L1339) |
+| Controls | Bar indicators (active = wide white), prev/next arrows | [src/App.tsx:1345-1370](../src/App.tsx#L1345-L1370) |
+| Data source | `hero_banners` table via `GET /api/slideshow-items`, ordered by `order_index` then newest. Admin-only edits. | [server.ts:3025-3122](../server.ts#L3025-L3122) |
+| Seeded banners (order) | 0 WELCOME / DA BALI RESORT · 1 Infinity Pool · 2 Fine Dining · 3 Pavilion · 4 Colored Tent/Team Building · 5 Salakot Room · 6 Bubu Room (seeded only when the table is empty) | [server.ts:335-414](../server.ts#L335-L414) |
+
+*Verified Sep 29, 2026: none of the Sep 26–28 commits changed any slideshow setting. Only line numbers moved.*
 
 *(The separate `ImageSlider` used in room and amenity cards has its own 5 s autoplay, swipe support, and a max of 7 dots. It isn't the hero slideshow.)*
 
@@ -665,6 +708,8 @@ Per the project instructions (`AGENTS.md`), the **hero slideshow settings are to
 | **Manual settlement** | Staff-recorded in-person payment of a balance |
 | **Walk-in** | Booking or sale made at the front desk for a guest without an online booking |
 | **DTR** | Daily Time Record (staff attendance) |
+| **Time Clock** | The card staff and housekeeping use to time themselves in and out |
+| **Awaiting Feedback** | Front-desk checkout state: the guest must review their stay before checkout |
 | **Turnover** | Cleaning a room between a checkout and the next check-in |
 | **Room-night** | One room occupied for one night (the unit for occupancy rate) |
 | **Occupancy rate** | Booked room-nights ÷ available room-nights in a period |
