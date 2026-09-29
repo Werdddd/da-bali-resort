@@ -609,100 +609,78 @@ if (faqCount.count === 0) {
   faqsToSeed.forEach(([question, answer, keywords, category], i) => insertFaq.run(question, answer, keywords, category, i));
 }
 
+// Photos live in src/ROOMS and src/AMENITIES, one folder per room/amenity. Files are ordered
+// naturally (photo2 before photo10) and the first one is always that folder's cover photo.
+const IMAGE_EXT = /\.(jpe?g|png|webp|gif)$/i;
+function folderImages(relDir: string): string[] {
+  const absDir = path.join(__dirname, "src", relDir);
+  try {
+    return fs.readdirSync(absDir)
+      .filter(file => IMAGE_EXT.test(file))
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }))
+      .map(file => `/src/${relDir}/${file}`);
+  } catch (e) {
+    console.warn(`Photo folder not found: src/${relDir}`);
+    return [];
+  }
+}
+
+const ROOM_DESCRIPTION_SALAKOT = "A cozy room perfect for couples, featuring a comfortable bed and modern amenities. Standard occupancy is 2 guests, with 1 extra bed available upon request (max 3 guests total).";
+const roomPhotoFolders: Record<string, string> = {
+  "Salakot - Room 1": "ROOMS/SALAKOT ROOM (Regular)/SALAKOT 1",
+  "Salakot - Room 2": "ROOMS/SALAKOT ROOM (Regular)/SALAKOT 2",
+  "Salakot - Room 3": "ROOMS/SALAKOT ROOM (Regular)/SALAKOT 3",
+  "Salakot - Room 4": "ROOMS/SALAKOT ROOM (Regular)/SALAKOT 4",
+  "Bubu Room Suite A": "ROOMS/BUBU ROOM (Family Suite)/BUBU ROOM A",
+  "Bubu Room Suite B": "ROOMS/BUBU ROOM (Family Suite)/BUBU ROOM B",
+};
+const roomPhotos = (name: string) => folderImages(roomPhotoFolders[name]);
+
 // Seed Rooms if empty
 const roomCount = db.prepare("SELECT COUNT(*) as count FROM rooms").get() as { count: number };
 if (roomCount.count === 0) {
   const insertRoom = db.prepare("INSERT INTO rooms (name, type, description, price, capacity, beds, image_url, images) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-  const salakotImages = JSON.stringify([
-    "/src/salakot-cover.jpg",
-    "/src/640319608_1567528164475455_2709569030306835485_n.jpg",
-    "/src/641145568_2018436052056912_4478781217590781643_n.jpg",
-    "/src/640888235_1638505960929333_6337003060724219881_n.jpg",
-    "/src/639584544_1606783847135354_491132229382811892_n.jpg"
-  ]);
-  const salakotRoom1Images = JSON.stringify([
-    "/src/salakot-cover.jpg",
-    "/src/640319608_1567528164475455_2709569030306835485_n.jpg",
-    "/src/641145568_2018436052056912_4478781217590781643_n.jpg",
-    "/src/640888235_1638505960929333_6337003060724219881_n.jpg",
-    "/src/639584544_1606783847135354_491132229382811892_n.jpg",
-    "/src/640756123_4477221685882725_1405252564951383475_n.jpg"
-  ]);
-  const salakotRoom2Images = JSON.stringify([
-    "/src/salakot-cover.jpg",
-    "/src/641727267_764936260014235_3873639624002707736_n.jpg",
-    "/src/646282494_1242456171288115_6760961007953019625_n.jpg",
-    "/src/640601675_25885362091113171_6569735119292729485_n.jpg",
-    "/src/640945362_26072958002356332_6459435786840651517_n.jpg"
-  ]);
-  const bubuImages = JSON.stringify([
-    "/src/bubu-cover.jpg",
-    "https://images.unsplash.com/photo-1595576508898-0ad5c879a061?auto=format&fit=crop&w=800&q=80",
-    "https://images.unsplash.com/photo-1611892440504-42a792e24d32?auto=format&fit=crop&w=800&q=80"
-  ]);
-  const bubuSuiteAImages = JSON.stringify([
-    "/src/bubu-cover.jpg",
-    "/src/664210733_1256366179987166_5527235306266192659_n.jpg",
-    "/src/641328477_901982226057038_417138723781078497_n.jpg",
-    "/src/640397043_1244756644465576_1212499529625400727_n.jpg",
-    "/src/646142069_4456375354688371_854695215553117776_n.jpg"
-  ]);
-  insertRoom.run("Salakot - Room 1", "Standard", "A cozy room perfect for couples, featuring a comfortable bed and modern amenities. Standard occupancy is 2 guests, with 1 extra bed available upon request (max 3 guests total).", 3000, 2, "1 Bed", "/src/salakot-cover.jpg", salakotRoom1Images);
-  insertRoom.run("Salakot - Room 2", "Standard", "A cozy room perfect for couples, featuring a comfortable bed and modern amenities. Standard occupancy is 2 guests, with 1 extra bed available upon request (max 3 guests total).", 2900, 2, "1 Bed", "/src/salakot-cover.jpg", salakotRoom2Images);
-  insertRoom.run("Salakot - Room 3", "Standard", "A cozy room perfect for couples, featuring a comfortable bed and modern amenities. Standard occupancy is 2 guests, with 1 extra bed available upon request (max 3 guests total).", 2900, 2, "1 Bed", "/src/salakot-cover.jpg", salakotImages);
-  insertRoom.run("Salakot - Room 4", "Standard", "A cozy room perfect for couples, featuring a comfortable bed and modern amenities. Standard occupancy is 2 guests, with 1 extra bed available upon request (max 3 guests total).", 2900, 2, "1 Bed", "/src/salakot-cover.jpg", salakotImages);
-  insertRoom.run("Bubu Room Suite A", "Family Suite", "Spacious family room with breakfast included. Ideal for large groups.", 6950, 8, "Double Bed", "/src/bubu-cover.jpg", bubuSuiteAImages);
-  insertRoom.run("Bubu Room Suite B", "Family Suite", "Spacious family room with breakfast included. Ideal for large groups.", 6950, 8, "Double Bed", "/src/bubu-cover.jpg", bubuImages);
+  const seedRoom = (name: string, type: string, description: string, price: number, capacity: number, beds: string) => {
+    const images = roomPhotos(name);
+    insertRoom.run(name, type, description, price, capacity, beds, images[0] || "", JSON.stringify(images));
+  };
+  seedRoom("Salakot - Room 1", "Standard", ROOM_DESCRIPTION_SALAKOT, 3000, 2, "1 Bed");
+  seedRoom("Salakot - Room 2", "Standard", ROOM_DESCRIPTION_SALAKOT, 2900, 2, "1 Bed");
+  seedRoom("Salakot - Room 3", "Standard", ROOM_DESCRIPTION_SALAKOT, 2900, 2, "1 Bed");
+  seedRoom("Salakot - Room 4", "Standard", ROOM_DESCRIPTION_SALAKOT, 2900, 2, "1 Bed");
+  seedRoom("Bubu Room Suite A", "Family Suite", "Spacious family room with breakfast included. Ideal for large groups.", 6950, 8, "Double Bed");
+  seedRoom("Bubu Room Suite B", "Family Suite", "Spacious family room with breakfast included. Ideal for large groups.", 6950, 8, "Double Bed");
 } else {
   // Update existing rooms to match new specs
-  const salakotImages = JSON.stringify([
-    "/src/salakot-cover.jpg",
-    "/src/640319608_1567528164475455_2709569030306835485_n.jpg",
-    "/src/641145568_2018436052056912_4478781217590781643_n.jpg",
-    "/src/640888235_1638505960929333_6337003060724219881_n.jpg",
-    "/src/639584544_1606783847135354_491132229382811892_n.jpg"
-  ]);
-  const salakotRoom1Images = JSON.stringify([
-    "/src/salakot-cover.jpg",
-    "/src/640319608_1567528164475455_2709569030306835485_n.jpg",
-    "/src/641145568_2018436052056912_4478781217590781643_n.jpg",
-    "/src/640888235_1638505960929333_6337003060724219881_n.jpg",
-    "/src/639584544_1606783847135354_491132229382811892_n.jpg",
-    "/src/640756123_4477221685882725_1405252564951383475_n.jpg"
-  ]);
-  const salakotRoom2Images = JSON.stringify([
-    "/src/salakot-cover.jpg",
-    "/src/641727267_764936260014235_3873639624002707736_n.jpg",
-    "/src/646282494_1242456171288115_6760961007953019625_n.jpg",
-    "/src/640601675_25885362091113171_6569735119292729485_n.jpg",
-    "/src/640945362_26072958002356332_6459435786840651517_n.jpg"
-  ]);
-  const bubuImages = JSON.stringify([
-    "/src/bubu-cover.jpg",
-    "https://images.unsplash.com/photo-1595576508898-0ad5c879a061?auto=format&fit=crop&w=800&q=80",
-    "https://images.unsplash.com/photo-1611892440504-42a792e24d32?auto=format&fit=crop&w=800&q=80"
-  ]);
-  const bubuSuiteAImages = JSON.stringify([
-    "/src/bubu-cover.jpg",
-    "/src/664210733_1256366179987166_5527235306266192659_n.jpg",
-    "/src/641328477_901982226057038_417138723781078497_n.jpg",
-    "/src/640397043_1244756644465576_1212499529625400727_n.jpg",
-    "/src/646142069_4456375354688371_854695215553117776_n.jpg"
-  ]);
-  db.prepare("UPDATE rooms SET images = ? WHERE name LIKE 'Salakot%'").run(salakotImages);
-  db.prepare("UPDATE rooms SET images = ? WHERE name = 'Salakot - Room 1'").run(salakotRoom1Images);
-  db.prepare("UPDATE rooms SET images = ? WHERE name = 'Salakot - Room 2'").run(salakotRoom2Images);
-  db.prepare("UPDATE rooms SET images = ? WHERE name LIKE 'Bubu Room%'").run(bubuImages);
-  db.prepare("UPDATE rooms SET images = ? WHERE name = 'Bubu Room Suite A'").run(bubuSuiteAImages);
-  db.prepare("UPDATE rooms SET name = 'Salakot - Room 4', type = 'Standard', price = 2900, description = 'A cozy room perfect for couples, featuring a comfortable bed and modern amenities. Standard occupancy is 2 guests, with 1 extra bed available upon request (max 3 guests total).' WHERE name = 'Executive Suite'").run();
-  db.prepare("UPDATE rooms SET price = 3000, description = 'A cozy room perfect for couples, featuring a comfortable bed and modern amenities. Standard occupancy is 2 guests, with 1 extra bed available upon request (max 3 guests total).' WHERE name = 'Salakot - Room 1'").run();
-  db.prepare("UPDATE rooms SET description = 'A cozy room perfect for couples, featuring a comfortable bed and modern amenities. Standard occupancy is 2 guests, with 1 extra bed available upon request (max 3 guests total).' WHERE name LIKE 'Salakot%'").run();
+  db.prepare(`UPDATE rooms SET name = 'Salakot - Room 4', type = 'Standard', price = 2900, description = '${ROOM_DESCRIPTION_SALAKOT}' WHERE name = 'Executive Suite'`).run();
+  db.prepare(`UPDATE rooms SET price = 3000, description = '${ROOM_DESCRIPTION_SALAKOT}' WHERE name = 'Salakot - Room 1'`).run();
+  db.prepare(`UPDATE rooms SET description = '${ROOM_DESCRIPTION_SALAKOT}' WHERE name LIKE 'Salakot%'`).run();
   db.prepare("UPDATE rooms SET type = 'Family Suite' WHERE name LIKE 'Bubu Room%'").run();
-  db.prepare("UPDATE rooms SET image_url = '/src/salakot-cover.jpg' WHERE name LIKE 'Salakot%'").run();
-  db.prepare("UPDATE rooms SET image_url = '/src/bubu-cover.jpg' WHERE name LIKE 'Bubu Room%'").run();
   // Ensure names are consistent
   db.prepare("UPDATE rooms SET name = 'Bubu Room Suite A' WHERE name LIKE 'Bubu Room%Suite A%' OR name LIKE 'Bubu Room% (Suite A)%'").run();
   db.prepare("UPDATE rooms SET name = 'Bubu Room Suite B' WHERE name LIKE 'Bubu Room%Suite B%' OR name LIKE 'Bubu Room% (Suite B)%'").run();
+  // Sync each room's gallery and cover photo with its folder
+  const updateRoomPhotos = db.prepare("UPDATE rooms SET image_url = ?, images = ? WHERE name = ?");
+  for (const name of Object.keys(roomPhotoFolders)) {
+    const images = roomPhotos(name);
+    if (images.length > 0) updateRoomPhotos.run(images[0], JSON.stringify(images), name);
+  }
+}
+
+// Sync the amenity galleries with their photo folders. Only amenities still using the
+// original default photos are touched, so images an admin sets later are kept.
+const amenityPhotoFolders: { name: string; folder: string; legacyCover: string }[] = [
+  { name: "Infinity Pool", folder: "AMENITIES/INFINITY POOL", legacyCover: "/src/Infinity Pool-1.jpg" },
+  { name: "Fine Dining", folder: "AMENITIES/FINE DINING", legacyCover: "/src/Fine Dining.jpg" },
+  { name: "Pavilion", folder: "AMENITIES/PAVILION (FUNCTION ROOM)", legacyCover: "/src/Pavilion.jpg" },
+  { name: "Colored Tent/Team Building", folder: "AMENITIES/COLORED TENT-TEAM BUILDING", legacyCover: "/src/Colored Tent.jpg" },
+];
+{
+  const updateAmenityPhotos = db.prepare("UPDATE amenities SET image_url = ?, images = ? WHERE name = ? AND (image_url IS NULL OR image_url = '' OR image_url = ? OR image_url LIKE ?)");
+  for (const { name, folder, legacyCover } of amenityPhotoFolders) {
+    const images = folderImages(folder);
+    if (images.length > 0) updateAmenityPhotos.run(images[0], JSON.stringify(images), name, legacyCover, `/src/${folder}/%`);
+  }
 }
 
 // Seed Admin

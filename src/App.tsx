@@ -86,30 +86,21 @@ import { ResortChatWidget, ChatTab } from './components/ResortChatWidget';
 import { SupportChatMessage } from './components/StaffChatPanel';
 import { getRoomStatusLabel, getRoomStatusBadgeClass } from './utils/roomStatus';
 import bgImage from './476799607_640944451796572_5504544646714415496_n.jpg';
-
-// --- Amenity Images ---
-import infinityPoolImg1 from './Infinity Pool-1.jpg';
-import infinityPoolImg2 from './480406880_644040298153654_2463853349071358905_n.jpg';
-import infinityPoolImg3 from './Gemini_Generated_Image_kjvmjykjvmjykjvm-5e2ae1f2-825a-4783-8463-521651433e35.png';
-import infinityPoolImg4 from './Gemini_Generated_Image_oe3usqoe3usqoe3u-2b1871a5-59ee-4f41-9b56-1cc75fc0b54f.png';
-import infinityPoolImg5 from './480445259_644030531487964_9076444296381717985_n.jpg';
-
-import fineDiningImg1 from './Fine Dining.jpg';
-import fineDiningImg2 from './481790925_653967750494242_6026827539068098534_n.jpg';
-import fineDiningImg3 from './Gemini_Generated_Image_iyqatyiyqatyiyqa-d19134c9-b152-46be-85ae-e74e55cfde87.png';
-import fineDiningImg4 from './Gemini_Generated_Image_n684p0n684p0n684-92668cd0-1ee0-4912-8a99-2f3286fdc34b.png';
-
-import pavilionImg1 from './Pavilion.jpg';
-import pavilionImg2 from './643787299_1216608037352086_6279788972109671811_n.jpg';
-import pavilionImg3 from './646469465_1325380779615286_8192261069276533553_n.jpg';
-import pavilionImg4 from './475775117_632931419264542_2841795206770194977_n.jpg';
-import pavilionImg5 from './479978587_641307308426953_3407257930518345529_n.jpg';
 import welcomeBannerImg from './476799607_640944451796572_5504544646714415496_n-1.jpg';
 
-import coloredTentImg1 from './Colored Tent.jpg';
-import coloredTentImg2 from './480084227_641106218447062_3256291434929677055_n.jpg';
-import coloredTentImg3 from './474584676_625466180011066_5754091576396187073_n.jpg';
-import coloredTentImg4 from './475317840_630208526203498_7342393900897973481_n.jpg';
+// --- Amenity Images ---
+// One folder per amenity in src/AMENITIES; photos sort naturally and the first is the cover.
+const amenityPhotoModules = import.meta.glob('./AMENITIES/**/*.{jpg,jpeg,png,webp}', { eager: true, import: 'default' }) as Record<string, string>;
+const amenityPhotos = (folder: string) =>
+  Object.keys(amenityPhotoModules)
+    .filter((file) => file.startsWith(`./AMENITIES/${folder}/`))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
+    .map((file) => amenityPhotoModules[file]);
+
+const infinityPoolImages = amenityPhotos('INFINITY POOL');
+const fineDiningImages = amenityPhotos('FINE DINING');
+const pavilionImages = amenityPhotos('PAVILION (FUNCTION ROOM)');
+const coloredTentImages = amenityPhotos('COLORED TENT-TEAM BUILDING');
 
 // --- Sub-components ---
 
@@ -5343,10 +5334,10 @@ export default function App() {
               ))
             ) : (
               [
-                { title: 'Infinity Pool', icon: 'Waves', desc: 'Dive into luxury with our stunning infinity pool overlooking the valley.', images: [infinityPoolImg1, infinityPoolImg2, infinityPoolImg3, infinityPoolImg4, infinityPoolImg5] },
-                { title: 'Fine Dining', icon: 'Coffee', desc: 'Exquisite culinary experiences featuring local and international flavors.', images: [fineDiningImg1, fineDiningImg2, fineDiningImg3, fineDiningImg4] },
-                { title: 'Pavilion', icon: 'Hotel', desc: 'Our iconic function room with traditional architecture.', images: [pavilionImg1, pavilionImg2, pavilionImg3, pavilionImg4, pavilionImg5] },
-                { title: 'Colored Tent/Team Building', icon: 'Calendar', desc: 'The perfect space for corporate retreats and group activities.', images: [coloredTentImg1, coloredTentImg2, coloredTentImg3, coloredTentImg4] }
+                { title: 'Infinity Pool', icon: 'Waves', desc: 'Dive into luxury with our stunning infinity pool overlooking the valley.', images: infinityPoolImages },
+                { title: 'Fine Dining', icon: 'Coffee', desc: 'Exquisite culinary experiences featuring local and international flavors.', images: fineDiningImages },
+                { title: 'Pavilion', icon: 'Hotel', desc: 'Our iconic function room with traditional architecture.', images: pavilionImages },
+                { title: 'Colored Tent/Team Building', icon: 'Calendar', desc: 'The perfect space for corporate retreats and group activities.', images: coloredTentImages }
               ].map((item) => (
                 <div key={item.title} className="bg-white rounded-3xl shadow-sm hover:shadow-xl transition-all overflow-hidden flex flex-col tablet:flex-row h-full border border-coffee-50">
                   <div className="tablet:w-1/2 h-64 tablet:h-auto relative overflow-hidden">
