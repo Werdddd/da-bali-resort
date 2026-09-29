@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { ChevronRight, Trash2 } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
 
 export interface SupportChatMessage {
   sender: string;
@@ -14,7 +14,6 @@ export interface StaffChatPanelProps {
   draft: string;
   onDraftChange: (val: string) => void;
   onSend: (e: React.FormEvent) => void;
-  onDeleteMessage?: (id: number) => void;
   onHeartClick?: (id: number) => void;
 }
 
@@ -22,7 +21,7 @@ const HeartIcon = ({ className }: { className: string }) => (
   <svg className={className} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>
 );
 
-export const StaffChatPanel = ({ messages, draft, onDraftChange, onSend, onDeleteMessage, onHeartClick }: StaffChatPanelProps) => {
+export const StaffChatPanel = ({ messages, draft, onDraftChange, onSend, onHeartClick }: StaffChatPanelProps) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -51,20 +50,7 @@ export const StaffChatPanel = ({ messages, draft, onDraftChange, onSend, onDelet
         {messages.map((msg, i) => (
           <div key={`${msg.sender}-${msg.id || msg.tempId || i}`} className={`flex ${msg.sender === 'You' ? 'justify-start flex-row-reverse' : 'justify-start'} group relative items-center gap-2`}>
             <div className={`max-w-[80%] p-3 rounded-2xl text-sm ${msg.sender === 'You' ? 'bg-coffee-800 text-white rounded-tr-none' : 'bg-white text-coffee-900 border border-coffee-100 rounded-tl-none'}`}>
-              <div className="flex justify-between items-start gap-2">
-                <p className="text-[10px] opacity-50 mb-1">{msg.sender}</p>
-                <div className="flex items-center gap-1">
-                  {msg.sender === 'You' && msg.id && onDeleteMessage && (
-                    <button
-                      onClick={() => onDeleteMessage(msg.id!)}
-                      className="opacity-0 group-hover:opacity-100 p-1 text-red-300 hover:text-red-100 transition-opacity"
-                      title="Delete message"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </button>
-                  )}
-                </div>
-              </div>
+              <p className="text-[10px] opacity-50 mb-1">{msg.sender}</p>
               {msg.text}
             </div>
             <div className="flex flex-col items-center gap-1">

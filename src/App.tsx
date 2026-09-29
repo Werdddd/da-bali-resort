@@ -1154,14 +1154,14 @@ const ExportDTRModal = ({ onClose, onExport, currentYear }: { onClose: () => voi
 
 const FEEDBACK_COMMENT_MAX = 1000;
 
-// Front-desk checkout confirmation. For a guest-account room booking with no review yet, it
-// reminds staff to ask for feedback before the guest leaves (walk-ins have no account to review from).
-const getCheckoutConfirmMessage = (booking: Booking | AmenityBooking) => {
-  const isRoomBookingAwaitingReview = !('amenity_name' in booking) && !!booking.user_id && !(booking as Booking).has_feedback;
-  return isRoomBookingAwaitingReview
-    ? 'This guest hasn\'t rated their stay yet. Remind them they can leave a review from their Guest Portal before they go.\n\nAre you sure you want to check out this reservation?'
-    : 'Are you sure you want to check out this reservation?';
-};
+// Guest-account room bookings can't be checked out until the guest reviews their stay
+// (walk-ins have no account to review from, so they're exempt). The server enforces the same rule.
+const isAwaitingCheckoutFeedback = (booking: Booking | AmenityBooking) =>
+  !('amenity_name' in booking) && !!booking.user_id && !(booking as Booking).has_feedback;
+
+const CHECKOUT_FEEDBACK_REQUIRED_HINT = 'The guest must submit feedback for their stay from the Guest Portal before they can be checked out.';
+
+const getCheckoutConfirmMessage = () => 'Are you sure you want to check out this reservation?';
 
 const FeedbackFormModal = ({ booking, onClose, onSubmit, form, setForm, isSubmitting, error }: {
   booking: Booking | null,
@@ -2448,19 +2448,21 @@ const ReceiptModal = ({
                           if (setConfirmDialog) {
                             setConfirmDialog({
                               title: 'Confirm Check Out',
-                              message: getCheckoutConfirmMessage(booking),
+                              message: getCheckoutConfirmMessage(),
                               onConfirm: async () => {
                                 await onUpdateStatus(booking.id, true, 'completed');
                               },
                               onCancel: () => {}
                             });
-                          } else if (window.confirm(getCheckoutConfirmMessage(booking))) {
+                          } else if (window.confirm(getCheckoutConfirmMessage())) {
                             await onUpdateStatus(booking.id, true, 'completed');
                           }
                         }}
-                        className="flex-1 py-2 px-3 bg-purple-600 text-white font-bold text-xs rounded-lg hover:bg-purple-700 transition-all flex items-center justify-center gap-1 shadow-sm"
+                        disabled={isAwaitingCheckoutFeedback(booking)}
+                        title={isAwaitingCheckoutFeedback(booking) ? CHECKOUT_FEEDBACK_REQUIRED_HINT : undefined}
+                        className="flex-1 py-2 px-3 bg-purple-600 text-white font-bold text-xs rounded-lg hover:bg-purple-700 transition-all flex items-center justify-center gap-1 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-purple-600"
                       >
-                        Check Out
+                        {isAwaitingCheckoutFeedback(booking) ? 'Awaiting Feedback' : 'Check Out'}
                       </button>
                     )}
                     {(booking.status as string) === 'confirmed' && onUpdateStatus && remainingBalance > 0.1 && (
@@ -2521,19 +2523,21 @@ const ReceiptModal = ({
                               if (setConfirmDialog) {
                                 setConfirmDialog({
                                   title: 'Confirm Check Out',
-                                  message: getCheckoutConfirmMessage(booking),
+                                  message: getCheckoutConfirmMessage(),
                                   onConfirm: async () => {
                                     await onUpdateStatus(booking.id, isAmenity, 'Completed');
                                   },
                                   onCancel: () => {}
                                 });
-                              } else if (window.confirm(getCheckoutConfirmMessage(booking))) {
+                              } else if (window.confirm(getCheckoutConfirmMessage())) {
                                 await onUpdateStatus(booking.id, isAmenity, 'Completed');
                               }
                             }}
-                            className="flex-1 py-2 px-3 bg-purple-600 text-white font-bold text-xs rounded-lg hover:bg-purple-700 transition-all flex items-center justify-center gap-1 shadow-sm"
+                            disabled={isAwaitingCheckoutFeedback(booking)}
+                            title={isAwaitingCheckoutFeedback(booking) ? CHECKOUT_FEEDBACK_REQUIRED_HINT : undefined}
+                            className="flex-1 py-2 px-3 bg-purple-600 text-white font-bold text-xs rounded-lg hover:bg-purple-700 transition-all flex items-center justify-center gap-1 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-purple-600"
                           >
-                            Check Out
+                            {isAwaitingCheckoutFeedback(booking) ? 'Awaiting Feedback' : 'Check Out'}
                           </button>
                         )}
                         {(booking.status as string) === 'confirmed' && onUpdateStatus && remainingBalance > 0.1 && (
@@ -2612,19 +2616,21 @@ const ReceiptModal = ({
                               if (setConfirmDialog) {
                                 setConfirmDialog({
                                   title: 'Confirm Check Out',
-                                  message: getCheckoutConfirmMessage(booking),
+                                  message: getCheckoutConfirmMessage(),
                                   onConfirm: async () => {
                                     await onUpdateStatus(booking.id, isAmenity, 'Completed');
                                   },
                                   onCancel: () => {}
                                 });
-                              } else if (window.confirm(getCheckoutConfirmMessage(booking))) {
+                              } else if (window.confirm(getCheckoutConfirmMessage())) {
                                 await onUpdateStatus(booking.id, isAmenity, 'Completed');
                               }
                             }}
-                            className="flex-1 py-2 px-3 bg-purple-600 text-white font-bold text-xs rounded-lg hover:bg-purple-700 transition-all flex items-center justify-center gap-1 shadow-sm"
+                            disabled={isAwaitingCheckoutFeedback(booking)}
+                            title={isAwaitingCheckoutFeedback(booking) ? CHECKOUT_FEEDBACK_REQUIRED_HINT : undefined}
+                            className="flex-1 py-2 px-3 bg-purple-600 text-white font-bold text-xs rounded-lg hover:bg-purple-700 transition-all flex items-center justify-center gap-1 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-purple-600"
                           >
-                            Check Out
+                            {isAwaitingCheckoutFeedback(booking) ? 'Awaiting Feedback' : 'Check Out'}
                           </button>
                         )}
                         {(booking.status as string) === 'confirmed' && onUpdateStatus && remainingBalance > 0.1 && (
@@ -3978,7 +3984,7 @@ export default function App() {
             // Stock/price live on the amenities list, which only these events can change.
             fetchAmenities().catch(console.error);
           }
-          if (user?.role === 'admin') {
+          if (user?.role === 'admin' || user?.role === 'staff') {
             fetchAdminData().catch(console.error);
           } else if (user) {
             fetchUserBookings(user.id).catch(console.error);
@@ -8008,15 +8014,17 @@ export default function App() {
                                                )}
                                                {booking.status === 'checked-in' && (
                                                  <button
-                                                   className="px-2 py-1 bg-purple-600 text-white text-[10px] rounded hover:bg-purple-700"
+                                                   disabled={isAwaitingCheckoutFeedback(booking)}
+                                                   title={isAwaitingCheckoutFeedback(booking) ? CHECKOUT_FEEDBACK_REQUIRED_HINT : undefined}
+                                                   className="px-2 py-1 bg-purple-600 text-white text-[10px] rounded hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-purple-600"
                                                    onClick={async (e) => {
                                                      e.stopPropagation();
-                                                     if (window.confirm(getCheckoutConfirmMessage(booking))) {
+                                                     if (window.confirm(getCheckoutConfirmMessage())) {
                                                        await handleUpdateStatus(booking.id, 'Completed');
                                                      }
                                                    }}
                                                  >
-                                                   Check Out
+                                                   {isAwaitingCheckoutFeedback(booking) ? 'Awaiting Feedback' : 'Check Out'}
                                                  </button>
                                                )}
                                              </td>
@@ -8517,40 +8525,6 @@ export default function App() {
                               return allMsgs.map((msg: any) => (
                                 <div key={msg.id} className={`flex ${msg.sender_id !== adminSelectedChatId ? 'justify-start flex-row-reverse' : 'justify-start'} group relative items-center gap-2`}>
                                   <div className={`max-w-[70%] p-3 rounded-2xl text-sm ${msg.sender_id !== adminSelectedChatId ? 'bg-coffee-800 text-white rounded-tr-none' : 'bg-white text-coffee-900 border border-coffee-100 rounded-tl-none shadow-sm'}`}>
-                                    <div className="flex justify-between items-start gap-2">
-                                      <div className="flex items-center gap-1">
-                                        {msg.sender_id !== adminSelectedChatId && msg.id !== 'welcome' && (
-                                          <button 
-                                            onClick={async () => {
-                                              try {
-                                                const res = await fetch(`/api/messages/${msg.id}`, { 
-                                                  method: 'DELETE',
-                                                  headers: {
-                                                    'x-user-id': user?.id?.toString() || '',
-                                                    'x-user-role': user?.role || ''
-                                                  }
-                                                });
-                                                if (res.ok) {
-                                                  setAdminMessagesMap((prev: any) => ({
-                                                    ...prev,
-                                                    [adminSelectedChatId]: prev[adminSelectedChatId].filter((m: any) => m.id !== msg.id)
-                                                  }));
-                                                } else {
-                                                  const err = await res.json();
-                                                  alert(err.error || 'Failed to delete message');
-                                                }
-                                              } catch (e) {
-                                                console.error(e);
-                                              }
-                                            }}
-                                            className="opacity-0 group-hover:opacity-100 p-1 text-red-300 hover:text-red-100 transition-opacity"
-                                            title="Delete message"
-                                          >
-                                            <Trash2 className="h-3 w-3" />
-                                          </button>
-                                        )}
-                                      </div>
-                                    </div>
                                     {msg.content}
                                   </div>
                                   <div className="flex flex-col items-center gap-1">
@@ -8835,27 +8809,6 @@ export default function App() {
         setChatMessages(prev => prev.map(m => m.id === msgId ? { ...m, has_heart: data.has_heart } : m));
       }
     } catch (e) {}
-  };
-
-  const handleDeleteGuestMessage = async (msgId: number) => {
-    try {
-      const res = await fetch(`/api/messages/${msgId}`, { 
-        method: 'DELETE',
-        headers: {
-          'x-user-id': user?.id?.toString() || '',
-          'x-user-role': user?.role || ''
-        }
-      });
-      if (res.ok) {
-        setChatMessages(prev => prev.filter(m => m.id !== msgId));
-      } else {
-        const err = await res.json();
-        alert(err.error || 'Failed to delete message');
-      }
-    } catch (e) {
-      console.error(e);
-      alert('Network error while deleting message');
-    }
   };
 
   const handleSendMessage = async (e: React.FormEvent) => {
@@ -9841,7 +9794,6 @@ export default function App() {
             draft: newMessage,
             onDraftChange: setNewMessage,
             onSend: handleSendMessage,
-            onDeleteMessage: handleDeleteGuestMessage,
             onHeartClick: handleToggleHeart,
             unreadCount: guestUnreadCount,
           } : undefined}

@@ -1737,6 +1737,18 @@ async function startServer() {
           }
         }
 
+        // Guests with an account must review their stay before checkout. Walk-ins have no
+        // account to review from, so they are exempt.
+        if (status.toLowerCase() === 'completed') {
+          const booking = db.prepare(`
+            SELECT b.user_id, EXISTS (SELECT 1 FROM feedbacks f WHERE f.booking_id = b.id) as has_feedback
+            FROM bookings b WHERE b.id = ?
+          `).get(id) as { user_id: number | null, has_feedback: number } | undefined;
+          if (booking && booking.user_id && !booking.has_feedback) {
+            return res.status(400).json({ error: "Guest cannot be checked out until they submit feedback for their stay from the Guest Portal." });
+          }
+        }
+
         let qrCode = null;
         if (status === 'confirmed') {
           // Generate a unique QR code key
@@ -3558,36 +3570,6 @@ async function startServer() {
     } catch (error) {
       console.error("Error sending message:", error);
       res.status(500).json({ error: "Failed to send message" });
-    }
-  });
-
-  app.delete("/api/messages/:id", (req, res) => {
-    try {
-      const messageId = parseInt(req.params.id);
-      const sessionUserId = req.session.userId;
-      const userId = sessionUserId ? parseInt(String(sessionUserId), 10) : null;
-      
-      if (!userId) {
-        return res.status(401).json({ error: "Unauthorized" });
-      }
-
-      const message = db.prepare("SELECT * FROM messages WHERE id = ?").get(messageId) as any;
-      if (!message) {
-        return res.status(404).json({ error: "Message not found" });
-      }
-
-      const userRole = (req.session as any)?.userRole;
-      const admin = db.prepare("SELECT id FROM users WHERE role = 'admin' LIMIT 1").get() as any;
-      const isSupportReply = admin && message.sender_id === admin.id && (userRole === 'admin' || userRole === 'staff');
-      if (message.sender_id !== userId && !isSupportReply) {
-        return res.status(403).json({ error: "Forbidden: You can only delete your own messages" });
-      }
-
-      db.prepare("DELETE FROM messages WHERE id = ?").run(messageId);
-      res.json({ success: true });
-    } catch (error) {
-      console.error("Error deleting message:", error);
-      res.status(500).json({ error: "Failed to delete message" });
     }
   });
 
