@@ -459,6 +459,10 @@ try {
   db.prepare("ALTER TABLE amenity_bookings ADD COLUMN admin_notes TEXT").run();
 } catch (e) {}
 
+// Amenity bookings use 'Completed' for finished reservations; older rows were saved in
+// lowercase and never showed up in the admin dashboard's Completed tab.
+db.prepare("UPDATE amenity_bookings SET status = 'Completed' WHERE status = 'completed'").run();
+
 try {
   db.prepare("ALTER TABLE messages ADD COLUMN is_read INTEGER DEFAULT 0").run();
 } catch (e) {}
@@ -2719,7 +2723,9 @@ async function startServer() {
 
   app.patch("/api/amenity-bookings/:id", (req, res) => {
     try {
-      const { status, admin_notes } = req.body;
+      const { admin_notes } = req.body;
+      // Keep a single spelling for finished bookings so they always land in the Completed tab.
+      const status = typeof req.body.status === 'string' && req.body.status.toLowerCase() === 'completed' ? 'Completed' : req.body.status;
       const { id } = req.params;
 
       const existingBooking = db.prepare("SELECT * FROM amenity_bookings WHERE id = ?").get(id) as any;
@@ -4280,19 +4286,24 @@ async function startServer() {
       `).run(today);
 
       // Do same for amenity bookings
-      db.prepare(`
+      const autoCompletedAmenities = db.prepare(`
         UPDATE amenity_bookings
-        SET status = 'completed'
+        SET status = 'Completed'
         WHERE (status = 'confirmed' OR status = 'checked-in')
         AND reservation_date < ?
       `).run(today);
 
-      db.prepare(`
+      const autoNoShowAmenities = db.prepare(`
         UPDATE amenity_bookings 
         SET status = 'no-show' 
         WHERE (status = 'pending' OR status = 'pending_verification') 
         AND reservation_date < ?
       `).run(today);
+
+      // Let open admin dashboards refresh so finished bookings move to the Completed tab.
+      if (autoCompletedAmenities.changes > 0 || autoNoShowAmenities.changes > 0) {
+        broadcast({ type: 'AMENITY_BOOKING_UPDATED' });
+      }
 
     } catch (error) {
       console.error("Error in autoUpdateBookingStatuses:", error);

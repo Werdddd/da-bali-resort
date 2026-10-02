@@ -1154,6 +1154,25 @@ const CHECKOUT_FEEDBACK_REQUIRED_HINT = 'The guest must submit feedback for thei
 
 const getCheckoutConfirmMessage = () => 'Are you sure you want to check out this reservation?';
 
+// Amenity bookings store guest input in one `details` string, built at checkout as
+// "Selected Items: ...\n\nAdditional Details: ..." (or just the guest's text when no items were picked).
+const parseAmenityBookingDetails = (details?: string) => {
+  const text = (details || '').trim();
+  if (!text.startsWith('Selected Items:')) return { selectedItems: '', specialRequests: text };
+  const [itemsPart, ...rest] = text.split('\n\nAdditional Details:');
+  return {
+    selectedItems: itemsPart.replace('Selected Items:', '').trim(),
+    specialRequests: rest.join('\n\nAdditional Details:').trim(),
+  };
+};
+
+// Finished reservations belong in the dashboard's Completed tab. Older records and the
+// server's auto-complete job may store 'completed' in lowercase, so compare case-insensitively.
+const isFinishedReservation = (status?: string) => {
+  const s = (status || '').toLowerCase();
+  return s === 'completed' || s === 'no-show';
+};
+
 const FeedbackFormModal = ({ booking, onClose, onSubmit, form, setForm, isSubmitting, error }: {
   booking: Booking | null,
   onClose: () => void,
@@ -2221,6 +2240,31 @@ const ReceiptModal = ({
             )}
           </div>
 
+          {isAdminView && isAmenity && (() => {
+            const { selectedItems, specialRequests } = parseAmenityBookingDetails((booking as AmenityBooking).details);
+            return (
+              <div className="border-t border-coffee-100 pt-6 mt-6 space-y-3">
+                <h3 className="text-xs font-bold text-coffee-900 uppercase tracking-widest flex items-center gap-2">
+                  <MessageSquare size={14} className="text-[#A3402A]" /> Guest Requests
+                </h3>
+                {selectedItems && (
+                  <div className="bg-coffee-50 p-3 rounded-xl border border-coffee-100">
+                    <p className="text-[9px] text-coffee-400 uppercase tracking-widest font-bold mb-1">Selected Items</p>
+                    <p className="text-sm text-coffee-900">{selectedItems}</p>
+                  </div>
+                )}
+                <div className="bg-amber-50/60 p-3 rounded-xl border border-amber-200/60">
+                  <p className="text-[9px] text-amber-700 uppercase tracking-widest font-bold mb-1">Additional Details / Special Requests</p>
+                  {specialRequests ? (
+                    <p className="text-sm text-coffee-900 whitespace-pre-wrap break-words">{specialRequests}</p>
+                  ) : (
+                    <p className="text-sm text-coffee-400 italic">No special requests provided.</p>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+
           {!isAmenity && ((booking.status as string) === 'confirmed' || (booking.status as string) === 'checked-in') && (booking as Booking).qr_code && (
             <div className="flex flex-col items-center space-y-3 pt-6 pb-2 border-t border-coffee-100 mt-6">
               <p className="text-[10px] text-coffee-400 uppercase tracking-widest font-bold">Unique Check-in ID</p>
@@ -2441,12 +2485,12 @@ const ReceiptModal = ({
                               title: 'Confirm Check Out',
                               message: getCheckoutConfirmMessage(),
                               onConfirm: async () => {
-                                await onUpdateStatus(booking.id, true, 'completed');
+                                await onUpdateStatus(booking.id, true, 'Completed');
                               },
                               onCancel: () => {}
                             });
                           } else if (window.confirm(getCheckoutConfirmMessage())) {
-                            await onUpdateStatus(booking.id, true, 'completed');
+                            await onUpdateStatus(booking.id, true, 'Completed');
                           }
                         }}
                         disabled={isAwaitingCheckoutFeedback(booking)}
@@ -2756,411 +2800,6 @@ const sanitizePhone = (phone: string) => {
 };
 const isValidEmail = (email: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.endsWith('.com');
 
-const WalkInModal = ({ rooms, bookings, onClose, onSubmit, setToastMessage }: { rooms: Room[], bookings: Booking[], onClose: () => void, onSubmit: (data: any) => void, setToastMessage: (msg: any) => void }) => {
-  const [formData, setFormData] = useState({
-    firstName: '',
-    lastName: '',
-    email: '',
-    contactNo: '',
-    roomId: '',
-    checkIn: format(new Date(), 'yyyy-MM-dd'),
-    checkOut: format(addDays(new Date(), 1), 'yyyy-MM-dd'),
-    guestsCount: 1,
-    extraBed: false,
-    paymentMethod: 'GCash'
-  });
-  const [isPaymentSummaryStep, setIsPaymentSummaryStep] = useState(false);
-  const [proofOfPayment, setProofOfPayment] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const room = rooms.find(r => r.id === parseInt(formData.roomId));
-  
-  // Calculate occupied dates for the selected room
-  const occupiedDates = useMemo(() => {
-    if (!formData.roomId) return [];
-    const today = startOfToday();
-    return bookings
-      .filter(b => b.room_id === parseInt(formData.roomId) && b.status !== 'cancelled' && b.status !== 'no-show')
-      .flatMap(b => {
-        // Use parseISO or ensure yyyy-MM-dd is treated as local date for consistency with DatePicker
-        const [y1, m1, d1] = b.check_in.split('-').map(Number);
-        const [y2, m2, d2] = b.check_out.split('-').map(Number);
-        const start = new Date(y1, m1 - 1, d1);
-        const end = new Date(y2, m2 - 1, d2);
-        
-        const dates = [];
-        let curr = new Date(start);
-        while (curr < end) {
-          if (!(b.status === 'Completed' && curr >= today)) {
-            dates.push(new Date(curr));
-          }
-          curr = addDays(curr, 1);
-        }
-        return dates;
-      });
-  }, [formData.roomId, bookings]);
-
-  const nights = differenceInDays(new Date(formData.checkOut), new Date(formData.checkIn));
-  const basePrice = room ? room.price * (nights || 1) : 0;
-  const extraBedPrice = formData.extraBed ? 500 * (nights || 1) : 0;
-  const totalPrice = basePrice + extraBedPrice;
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    // Required Fields Validation for Walk-in
-    if (!formData.firstName.trim() || !formData.lastName.trim()) {
-      setToastMessage({ title: 'Error', message: 'Guest name is required.', type: 'error' });
-      return;
-    }
-    if (!formData.roomId) {
-      setToastMessage({ title: 'Error', message: 'Please select a room.', type: 'error' });
-      return;
-    }
-    
-    // Date Validation
-    if (new Date(formData.checkOut) <= new Date(formData.checkIn)) {
-      setToastMessage({ title: 'Error', message: 'Check-out date must be after check-in date.', type: 'error' });
-      return;
-    }
-
-    // Double Booking Validation
-    const isOverlapping = bookings.some(b => {
-      if (b.room_id !== parseInt(formData.roomId)) return false;
-      if (b.status === 'cancelled' || b.status === 'no-show') return false;
-      
-      const start = new Date(formData.checkIn);
-      const end = new Date(formData.checkOut);
-      const bStart = new Date(b.check_in);
-      const bEnd = new Date(b.check_out);
-      
-      return (start < bEnd && end > bStart);
-    });
-
-    if (isOverlapping) {
-      setToastMessage({ title: 'Error', message: 'This room is already booked for the selected dates.', type: 'error' });
-      return;
-    }
-
-    setIsPaymentSummaryStep(true);
-  };
-
-  const handleFinalize = () => {
-    // Ensure we reset state after walk-in submit too (handled in fetchAdminData but good to clear local)
-    onSubmit({ ...formData, totalPrice, proofOfPayment });
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 5 * 1024 * 1024) {
-        setToastMessage({ title: 'Error', message: 'File size must be less than 5MB.', type: 'error' });
-        return;
-      }
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setProofOfPayment(reader.result as string);
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
-  return (
-    <div className="absolute inset-0 bg-black/60 z-[500] flex items-center justify-center p-4 py-12 backdrop-blur-sm">
-      <motion.div 
-        initial={{ opacity: 0, scale: 0.9 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="bg-white w-full max-w-lg rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-full"
-      >
-        <div className="bg-coffee-900 p-6 text-white flex justify-between items-center shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-white/10 rounded-xl">
-              <UserPlus className="h-5 w-5 text-coffee-300" />
-            </div>
-            <div>
-              <h2 className="text-xl font-serif font-bold">Admin Overwrite (Walk-in)</h2>
-              <p className="text-[10px] text-coffee-300 uppercase tracking-widest">{isPaymentSummaryStep ? 'Payment Summary' : 'Direct Reservation'}</p>
-            </div>
-          </div>
-          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-colors">
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-        
-        <div className="flex-1 overflow-auto custom-scrollbar">
-          {isPaymentSummaryStep ? (
-            <div className="p-8 space-y-6">
-              <div className="bg-coffee-50 rounded-2xl p-6 border border-coffee-100 space-y-4">
-                <div className="flex justify-between items-center border-b border-coffee-100 pb-3">
-                  <h4 className="text-sm font-bold text-coffee-900 uppercase tracking-widest flex items-center gap-2">
-                    <Receipt size={16} className="text-[#A3402A]" /> Booking Summary
-                  </h4>
-                  <span className="text-[10px] font-bold text-[#518C63] bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-100 uppercase tracking-wider">Walk-in Reservation</span>
-                </div>
-                <div className="grid grid-cols-2 gap-y-4 gap-x-8">
-                  <div className="space-y-1">
-                    <p className="text-[9px] font-bold text-coffee-400 uppercase tracking-widest">Guest Detail</p>
-                    <p className="text-sm font-bold text-coffee-900 truncate">{formData.firstName} {formData.lastName}</p>
-                    <p className="text-[10px] text-coffee-600 truncate">{formData.email || 'No email provided'}</p>
-                  </div>
-                  <div className="space-y-1">
-                    <p className="text-[9px] font-bold text-coffee-400 uppercase tracking-widest">Accommodation</p>
-                    <p className="text-sm font-bold text-coffee-900">{rooms.find(r => r.id === parseInt(formData.roomId))?.name || 'N/A'}</p>
-                    <p className="text-[10px] text-coffee-600">{formData.guestsCount} Guests {formData.extraBed ? '+ Extra Bed' : ''}</p>
-                  </div>
-                  <div className="space-y-1">
-                    <p className="text-[9px] font-bold text-coffee-400 uppercase tracking-widest">Stay Duration</p>
-                    <p className="text-sm font-bold text-coffee-900 flex items-center gap-1.5">
-                      {format(new Date(formData.checkIn), 'MMM dd')} - {format(new Date(formData.checkOut), 'MMM dd')}
-                    </p>
-                    <p className="text-[10px] text-coffee-600">{differenceInDays(new Date(formData.checkOut), new Date(formData.checkIn))} Night(s)</p>
-                  </div>
-                  <div className="space-y-1 text-right">
-                    <p className="text-[9px] font-bold text-coffee-400 uppercase tracking-widest">Total Transaction</p>
-                    <p className="text-xl font-serif font-bold text-coffee-900">₱{(totalPrice || 0).toLocaleString()}</p>
-                    <p className="text-[9px] text-[#A3402A] font-bold uppercase tracking-wider">{formData.paymentMethod} Payment</p>
-                  </div>
-                </div>
-              </div>
-            
-            {formData.paymentMethod === 'Cash' ? (
-              <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100 text-center">
-                <p className="text-sm text-emerald-800">Please confirm the collection of <span className="font-bold">₱{(totalPrice || 0).toLocaleString()}</span> in cash from the guest.</p>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="p-4 bg-gray-50 rounded-2xl border border-gray-200 text-center">
-                  <p className="text-xs font-bold text-gray-700 uppercase mb-3">{formData.paymentMethod} QR Code</p>
-                  <div className="bg-white p-3 rounded-xl inline-block shadow-sm border border-gray-100">
-                    <QRCodeSVG 
-                      value={formData.paymentMethod === 'GCash' ? '09629724075' : '1234-5678-90'} 
-                      size={140}
-                      level="H"
-                      includeMargin={true}
-                    />
-                  </div>
-                  <p className="mt-2 text-[10px] text-gray-500 font-medium font-mono">Verify receipt before finalizing</p>
-                </div>
-                
-                <input 
-                  type="file"
-                  ref={fileInputRef}
-                  onChange={handleFileChange}
-                  accept="image/*"
-                  className="hidden"
-                />
-                
-                {proofOfPayment ? (
-                  <div className="relative group rounded-2xl overflow-hidden border-2 border-emerald-100 aspect-video bg-gray-50">
-                    <img src={proofOfPayment} alt="Proof" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                      <button 
-                        onClick={() => fileInputRef.current?.click()}
-                        className="p-2 bg-white rounded-full text-coffee-900 hover:bg-coffee-50 transition-colors"
-                      >
-                        <RefreshCw size={16} />
-                      </button>
-                      <button 
-                        onClick={() => setProofOfPayment(null)}
-                        className="p-2 bg-white rounded-full text-red-600 hover:bg-red-50 transition-colors"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                    <div className="absolute bottom-2 left-2 right-2 bg-white/90 backdrop-blur-sm p-2 rounded-lg flex items-center gap-2">
-                      <CheckCircle2 className="h-3 w-3 text-emerald-600" />
-                      <span className="text-[10px] font-bold text-emerald-700 uppercase">Proof Uploaded Successfully</span>
-                    </div>
-                  </div>
-                ) : (
-                  <button 
-                    onClick={() => fileInputRef.current?.click()}
-                    className="w-full py-4 rounded-2xl font-bold text-coffee-900 bg-coffee-50 border-2 border-dashed border-coffee-200 hover:bg-coffee-100 hover:border-coffee-300 transition-all flex flex-col items-center gap-1"
-                  >
-                    <Upload className="h-5 w-5 text-coffee-400" />
-                    <span className="text-xs">Upload Physical/Digital Receipt Screenshot</span>
-                    <span className="text-[9px] text-coffee-400 font-normal">Standardize proof for records</span>
-                  </button>
-                )}
-              </div>
-            )}
-            
-            <div className="flex justify-end gap-3 pt-6 border-t border-coffee-50">
-              <button type="button" onClick={() => setIsPaymentSummaryStep(false)} className="px-6 py-2.5 rounded-xl font-bold text-coffee-500 hover:bg-coffee-50 transition-all">Go Back</button>
-              <button 
-                disabled={formData.paymentMethod !== 'Cash' && !proofOfPayment}
-                onClick={handleFinalize} 
-                className={`px-8 py-2.5 rounded-xl font-bold transition-all shadow-lg flex items-center gap-2 ${
-                  formData.paymentMethod !== 'Cash' && !proofOfPayment 
-                    ? 'bg-gray-200 text-gray-400 cursor-not-allowed shadow-none' 
-                    : 'bg-[#518C63] text-white hover:bg-[#41704F]'
-                }`}
-              >
-                <Check className="h-4 w-4" />
-                Confirm & Finalize
-              </button>
-            </div>
-          </div>
-        ) : (
-          <form onSubmit={handleSubmit} className="p-8 space-y-4">
-            {/* ... form fields ... */}
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-bold text-coffee-500 uppercase mb-1">First Name</label>
-                <input 
-                  required
-                  value={formData.firstName}
-                  onChange={e => setFormData({...formData, firstName: sanitizeName(e.target.value)})}
-                  className="w-full px-4 py-2.5 rounded-xl border border-coffee-200 focus:ring-2 focus:ring-coffee-500 outline-none transition-all"
-                  placeholder="John"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-coffee-500 uppercase mb-1">Last Name</label>
-                <input 
-                  required
-                  value={formData.lastName}
-                  onChange={e => setFormData({...formData, lastName: sanitizeName(e.target.value)})}
-                  className="w-full px-4 py-2.5 rounded-xl border border-coffee-200 focus:ring-2 focus:ring-coffee-500 outline-none transition-all"
-                  placeholder="Doe"
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-bold text-coffee-500 uppercase mb-1">Email (Optional)</label>
-                <input 
-                  type="email"
-                  value={formData.email}
-                  onChange={e => setFormData({...formData, email: e.target.value})}
-                  className="w-full px-4 py-2.5 rounded-xl border border-coffee-200 focus:ring-2 focus:ring-coffee-500 outline-none transition-all"
-                  placeholder="john@example.com"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-coffee-500 uppercase mb-1">Contact No</label>
-                <input 
-                  value={formData.contactNo}
-                  onChange={e => setFormData({...formData, contactNo: sanitizePhone(e.target.value)})}
-                  placeholder="09XX-XXX-XXXX"
-                  className="w-full px-4 py-2.5 rounded-xl border border-coffee-200 focus:ring-2 focus:ring-coffee-500 outline-none transition-all"
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-4">
-              <div>
-                <label className="block text-xs font-bold text-coffee-500 uppercase mb-1">Guests</label>
-                <input 
-                  type="number"
-                  min="1"
-                  value={formData.guestsCount ?? ''}
-                  onChange={e => setFormData({...formData, guestsCount: e.target.value === '' ? 1 : parseInt(e.target.value)})}
-                  className="w-full px-4 py-2.5 rounded-xl border border-coffee-200 focus:ring-2 focus:ring-coffee-500 outline-none transition-all"
-                />
-              </div>
-              <div className="col-span-2">
-                <label className="block text-xs font-bold text-coffee-500 uppercase mb-1">Room Selection</label>
-                <select 
-                  required
-                  value={formData.roomId ?? ''}
-                  onChange={e => setFormData({...formData, roomId: e.target.value})}
-                  className="w-full px-4 py-2.5 rounded-xl border border-coffee-200 focus:ring-2 focus:ring-coffee-500 outline-none transition-all bg-white"
-                >
-                  <option value="">Select a room</option>
-                  {rooms.filter(r => r.status === 'available').map(room => (
-                    <option key={room.id} value={room.id}>{room.name} - ₱{room.price}/night</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="relative">
-                <label className="block text-xs font-bold text-coffee-500 uppercase mb-1">Check-in</label>
-                <DatePicker
-                  selected={new Date(formData.checkIn)}
-                  onChange={(date) => {
-                    if (date) {
-                      const newCheckIn = format(date, 'yyyy-MM-dd');
-                      let newCheckOut = formData.checkOut;
-                      if (new Date(newCheckOut) <= date) {
-                        newCheckOut = format(addDays(date, 1), 'yyyy-MM-dd');
-                      }
-                      setFormData({...formData, checkIn: newCheckIn, checkOut: newCheckOut});
-                    }
-                  }}
-                  selectsStart
-                  startDate={new Date(formData.checkIn)}
-                  endDate={new Date(formData.checkOut)}
-                  minDate={new Date()}
-                  excludeDates={occupiedDates}
-                  className="w-full px-4 py-2.5 rounded-xl border border-coffee-200 focus:ring-2 focus:ring-coffee-500 outline-none transition-all"
-                  placeholderText="Select check-in"
-                />
-              </div>
-              <div className="relative">
-                <label className="block text-xs font-bold text-coffee-500 uppercase mb-1">Check-out</label>
-                <DatePicker
-                  selected={new Date(formData.checkOut)}
-                  onChange={(date) => {
-                    if (date) {
-                      setFormData({...formData, checkOut: format(date, 'yyyy-MM-dd')});
-                    }
-                  }}
-                  selectsEnd
-                  startDate={new Date(formData.checkIn)}
-                  endDate={new Date(formData.checkOut)}
-                  minDate={addDays(new Date(formData.checkIn), 1)}
-                  excludeDates={occupiedDates}
-                  className="w-full px-4 py-2.5 rounded-xl border border-coffee-200 focus:ring-2 focus:ring-coffee-500 outline-none transition-all"
-                  placeholderText="Select check-out"
-                />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <label className="block text-xs font-bold text-coffee-500 uppercase mb-1">Payment Method</label>
-              <div className="grid grid-cols-3 gap-2">
-                {['GCash', 'BPI', 'Cash'].map(method => (
-                  <button
-                    key={method}
-                    type="button"
-                    onClick={() => setFormData({...formData, paymentMethod: method})}
-                    className={`px-4 py-2 rounded-xl text-sm font-bold transition-all ${formData.paymentMethod === method ? 'bg-coffee-900 text-white' : 'bg-coffee-50 text-coffee-600 hover:bg-coffee-100'}`}
-                  >
-                    {method}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="flex items-center gap-3 p-4 bg-coffee-50 rounded-2xl border border-coffee-100">
-              <input 
-                type="checkbox"
-                id="walkin-extra-bed"
-                checked={formData.extraBed}
-                onChange={e => setFormData({...formData, extraBed: e.target.checked})}
-                className="w-5 h-5 rounded border-coffee-300 text-coffee-900 focus:ring-coffee-500"
-              />
-              <label htmlFor="walkin-extra-bed" className="text-sm font-bold text-coffee-900 flex-1">
-                Add Extra Bed (+₱500/night)
-              </label>
-            </div>
-            <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100 flex justify-between items-center">
-              <span className="text-xs font-bold text-emerald-700 uppercase">Total Quotation (100%)</span>
-              <span className="text-xl font-serif font-bold text-emerald-900">₱{(totalPrice || 0).toLocaleString()}</span>
-            </div>
-            <div className="flex justify-end gap-3 pt-6 border-t border-coffee-50">
-              <button type="button" onClick={onClose} className="px-6 py-2.5 rounded-xl font-bold text-coffee-500 hover:bg-coffee-50 transition-all">Cancel</button>
-              <button type="submit" className="px-8 py-2.5 rounded-xl font-bold bg-coffee-900 text-white hover:bg-coffee-800 transition-all shadow-lg shadow-coffee-900/20 flex items-center gap-2">
-                <Check className="h-4 w-4" />
-                Proceed to Payment
-              </button>
-            </div>
-          </form>
-        )}
-        </div>
-      </motion.div>
-    </div>
-  );
-};
-
 // --- Main App Component ---
 
 export default function App() {
@@ -3266,7 +2905,6 @@ export default function App() {
   const [showAmenityProofViewer, setShowAmenityProofViewer] = useState<AmenityBooking | null>(null);
   const [lastBooking, setLastBooking] = useState<Booking | null>(null);
   const [lastAmenityBooking, setLastAmenityBooking] = useState<AmenityBooking | null>(null);
-  const [showWalkInModal, setShowWalkInModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportReportType, setExportReportType] = useState<'overall' | 'monthly'>('overall');
   const [selectedMonthForReport, setSelectedMonthForReport] = useState(format(new Date(), 'yyyy-MM'));
@@ -3372,29 +3010,6 @@ export default function App() {
       });
     }
   }, [user]);
-
-  const handleWalkInSubmit = async (data: any) => {
-    try {
-      const res = await fetch('/api/bookings/walk-in', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
-      });
-
-      if (res.ok) {
-        setShowWalkInModal(false);
-        await fetchAdminData();
-        setAdminActiveTab('payments');
-        setToastMessage({ title: 'Success', message: 'Walk-in booking created successfully! Redirecting to Payment Transactions.', type: 'success' });
-      } else {
-        const err = await res.json();
-        setToastMessage({ title: 'Error', message: err.error || 'Failed to create walk-in booking.', type: 'error' });
-      }
-    } catch (error) {
-      console.error('Walk-in error:', error);
-      setToastMessage({ title: 'Error', message: 'An error occurred while creating the walk-in booking.', type: 'error' });
-    }
-  };
 
   useEffect(() => {
     if (page === 'admin-dashboard' && adminActiveTab === 'overview') {
@@ -7671,13 +7286,6 @@ export default function App() {
                             <Download className="h-4 w-4" />
                             Export
                           </button>
-                          <button 
-                            onClick={() => setShowWalkInModal(true)}
-                            className="bg-[#518C63] text-white px-6 py-2.5 rounded-xl text-xs font-bold hover:bg-[#41704F] transition-all shadow-md flex items-center justify-center gap-2 whitespace-nowrap"
-                          >
-                            <UserPlus className="h-4 w-4" />
-                            Walk-In
-                          </button>
                         </div>
                       </div>
 
@@ -7757,8 +7365,8 @@ export default function App() {
                                     .filter(b => {
                                       if (reservationFilter === 'Archived') return b.is_archived === 1 || b.status === 'cancelled';
                                       if (b.is_archived === 1 || b.status === 'cancelled') return false;
-                                      if (reservationFilter === 'Completed') return b.status === 'Completed' || b.status === 'no-show';
-                                      if (reservationFilter === 'Upcoming') return b.status !== 'Completed' && b.status !== 'no-show';
+                                      if (reservationFilter === 'Completed') return isFinishedReservation(b.status);
+                                      if (reservationFilter === 'Upcoming') return !isFinishedReservation(b.status);
                                       return true;
                                     })
                                     .filter(b => {
@@ -7791,8 +7399,8 @@ export default function App() {
                                         .filter(b => {
                                           if (reservationFilter === 'Archived') return b.is_archived === 1 || b.status === 'cancelled';
                                           if (b.is_archived === 1 || b.status === 'cancelled') return false;
-                                          if (reservationFilter === 'Completed') return b.status === 'Completed' || b.status === 'no-show';
-                                          if (reservationFilter === 'Upcoming') return b.status !== 'Completed' && b.status !== 'no-show';
+                                          if (reservationFilter === 'Completed') return isFinishedReservation(b.status);
+                                          if (reservationFilter === 'Upcoming') return !isFinishedReservation(b.status);
                                           return true;
                                         })
                                         .filter(b => {
@@ -7874,8 +7482,8 @@ export default function App() {
                                   .filter(b => {
                                     if (reservationFilter === 'Archived') return b.is_archived === 1 || b.status === 'cancelled';
                                     if (b.is_archived === 1 || b.status === 'cancelled') return false;
-                                    if (reservationFilter === 'Completed') return b.status === 'Completed' || b.status === 'no-show';
-                                    if (reservationFilter === 'Upcoming') return b.status !== 'Completed' && b.status !== 'no-show';
+                                    if (reservationFilter === 'Completed') return isFinishedReservation(b.status);
+                                    if (reservationFilter === 'Upcoming') return !isFinishedReservation(b.status);
                                     return true;
                                   })
                                   .filter(b => {
@@ -7904,8 +7512,8 @@ export default function App() {
                                       .filter(b => {
                                         if (reservationFilter === 'Archived') return b.is_archived === 1 || b.status === 'cancelled';
                                         if (b.is_archived === 1 || b.status === 'cancelled') return false;
-                                        if (reservationFilter === 'Completed') return b.status === 'Completed' || b.status === 'no-show';
-                                        if (reservationFilter === 'Upcoming') return b.status !== 'Completed' && b.status !== 'no-show';
+                                        if (reservationFilter === 'Completed') return isFinishedReservation(b.status);
+                                        if (reservationFilter === 'Upcoming') return !isFinishedReservation(b.status);
                                         return true;
                                       })
                                       .filter(b => {
@@ -8028,8 +7636,8 @@ export default function App() {
                                       .filter(b => {
                                         if (reservationFilter === 'Archived') return b.is_archived === 1 || b.status === 'cancelled';
                                         if (b.is_archived === 1 || b.status === 'cancelled') return false;
-                                        if (reservationFilter === 'Completed') return b.status === 'Completed' || b.status === 'no-show';
-                                        if (reservationFilter === 'Upcoming') return b.status !== 'Completed' && b.status !== 'no-show';
+                                        if (reservationFilter === 'Completed') return isFinishedReservation(b.status);
+                                        if (reservationFilter === 'Upcoming') return !isFinishedReservation(b.status);
                                         return true;
                                       })
                                       .filter(b => {
@@ -8058,8 +7666,8 @@ export default function App() {
                                           .filter(b => {
                                             if (reservationFilter === 'Archived') return b.is_archived === 1 || b.status === 'cancelled';
                                             if (b.is_archived === 1 || b.status === 'cancelled') return false;
-                                            if (reservationFilter === 'Completed') return b.status === 'Completed' || b.status === 'no-show';
-                                            if (reservationFilter === 'Upcoming') return b.status !== 'Completed' && b.status !== 'no-show';
+                                            if (reservationFilter === 'Completed') return isFinishedReservation(b.status);
+                                            if (reservationFilter === 'Upcoming') return !isFinishedReservation(b.status);
                                             return true;
                                           })
                                           .filter(b => {
@@ -8677,15 +8285,6 @@ export default function App() {
                 </div>
               </div>
             </div>
-          )}
-          {showWalkInModal && (
-            <WalkInModal 
-              rooms={rooms} 
-              bookings={bookings}
-              onClose={() => setShowWalkInModal(false)} 
-              onSubmit={handleWalkInSubmit} 
-              setToastMessage={setToastMessage}
-            />
           )}
           {editingScheduleRecord && (
             <EditStaffModal 
