@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import Markdown from 'react-markdown';
 import DatePicker from 'react-datepicker';
 import { 
@@ -1435,6 +1435,33 @@ const RoomCard = ({ room, onBook }: { room: Room, onBook: (room: Room) => void }
   );
 };
 
+type PaymentQrInfo = { qr_image: string | null, account_name: string | null, account_number: string | null };
+type PaymentQrMap = Partial<Record<'GCash' | 'BPI', PaymentQrInfo>>;
+
+// Loads the admin-configured GCash/BPI QR codes and account details.
+const usePaymentQr = () => {
+  const [qrSettings, setQrSettings] = useState<PaymentQrMap>({});
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch('/api/payment-qr');
+      if (res.ok) setQrSettings(await res.json());
+    } catch (e) {
+      console.error('Failed to fetch payment QR settings:', e);
+    }
+  }, []);
+  useEffect(() => { refresh(); }, [refresh]);
+  return { qrSettings, refresh };
+};
+
+// Shows the uploaded QR image for the method, or the old generated placeholder if none was uploaded.
+const PaymentQrImage = ({ method, info, size }: { method: 'GCash' | 'BPI', info?: PaymentQrInfo, size: number }) => (
+  info?.qr_image ? (
+    <img src={info.qr_image} alt={`${method} payment QR`} style={{ width: size, height: size }} className="object-contain" />
+  ) : (
+    <QRCodeSVG value={method === 'GCash' ? "https://qr.gcash.com/example-resort-payment" : "https://qr.bpi.com.ph/example-resort-payment"} size={size} />
+  )
+);
+
 const ProofUploadModal = ({ booking, onClose, onUpload, isUploading, setToastMessage, isBalance = false }: { 
   booking: Booking, 
   onClose: () => void, 
@@ -1448,6 +1475,7 @@ const ProofUploadModal = ({ booking, onClose, onUpload, isUploading, setToastMes
   const [amountPaid, setAmountPaid] = useState<string>('');
   const [transactionReference, setTransactionReference] = useState<string>('');
   const [paymentMethod, setPaymentMethod] = useState<'GCash' | 'BPI'>('GCash');
+  const { qrSettings } = usePaymentQr();
   const requiredAmount = isBalance ? booking.total_price - (booking.amount_paid || 0) : booking.total_price / 2;
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1499,14 +1527,10 @@ const ProofUploadModal = ({ booking, onClose, onUpload, isUploading, setToastMes
             <div className="bg-coffee-50 p-4 rounded-2xl border border-coffee-100 flex flex-col items-center">
               <p className="text-[10px] text-coffee-400 uppercase tracking-widest mb-2">Scan to Pay via {paymentMethod}</p>
               <div className="bg-white p-2 rounded-xl shadow-sm">
-                {paymentMethod === 'GCash' ? (
-                  <QRCodeSVG value="https://qr.gcash.com/example-resort-payment" size={120} />
-                ) : (
-                  <QRCodeSVG value="https://qr.bpi.com.ph/example-resort-payment" size={120} />
-                )}
+                <PaymentQrImage method={paymentMethod} info={qrSettings[paymentMethod]} size={160} />
               </div>
               <p className="text-xs font-bold text-coffee-900 mt-2">
-                {paymentMethod === 'GCash' ? 'Da Bali Resort - 09629724075' : 'Da Bali Resort - 1234-5678-90'}
+                {`${qrSettings[paymentMethod]?.account_name || 'Da Bali Resort'} - ${qrSettings[paymentMethod]?.account_number || ''}`}
               </p>
             </div>
             <div className="space-y-1">
@@ -1620,6 +1644,7 @@ const AmenityProofUploadModal = ({ booking, onClose, onUpload, isUploading, isBa
   const [amountPaid, setAmountPaid] = useState(requiredAmount.toString());
   const [transactionReference, setTransactionReference] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<'GCash' | 'BPI'>('GCash');
+  const { qrSettings } = usePaymentQr();
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1668,14 +1693,10 @@ const AmenityProofUploadModal = ({ booking, onClose, onUpload, isUploading, isBa
             <div className="bg-coffee-50 p-4 rounded-2xl border border-coffee-100 flex flex-col items-center">
               <p className="text-[10px] text-coffee-400 uppercase tracking-widest mb-2">Scan to Pay via {paymentMethod}</p>
               <div className="bg-white p-2 rounded-xl shadow-sm">
-                {paymentMethod === 'GCash' ? (
-                  <QRCodeSVG value="https://qr.gcash.com/example-resort-payment" size={120} />
-                ) : (
-                  <QRCodeSVG value="https://qr.bpi.com.ph/example-resort-payment" size={120} />
-                )}
+                <PaymentQrImage method={paymentMethod} info={qrSettings[paymentMethod]} size={160} />
               </div>
               <p className="text-xs font-bold text-coffee-900 mt-2">
-                {paymentMethod === 'GCash' ? 'Da Bali Resort - 09629724075' : 'Da Bali Resort - 1234-5678-90'}
+                {`${qrSettings[paymentMethod]?.account_name || 'Da Bali Resort'} - ${qrSettings[paymentMethod]?.account_number || ''}`}
               </p>
             </div>
             <div className="space-y-1">
@@ -3281,6 +3302,43 @@ export default function App() {
   const [bookingTransactionReference, setBookingTransactionReference] = useState<string>('');
   const [amenityBookingProof, setAmenityBookingProof] = useState<string | null>(null);
   const [amenityPaymentMethod, setAmenityPaymentMethod] = useState<'GCash' | 'BPI'>('GCash');
+  const { qrSettings: paymentQr, refresh: refreshPaymentQr } = usePaymentQr();
+  const [qrSavingMethod, setQrSavingMethod] = useState<'GCash' | 'BPI' | null>(null);
+
+  const savePaymentQr = async (method: 'GCash' | 'BPI', body: Record<string, any>) => {
+    setQrSavingMethod(method);
+    try {
+      const res = await fetch(`/api/payment-qr/${method}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Failed to save');
+      await refreshPaymentQr();
+      setToastMessage({ title: 'Saved', message: `${method} payment details updated.`, type: 'success' });
+    } catch (e: any) {
+      setToastMessage({ title: 'Error', message: e.message || 'Failed to save', type: 'error' });
+    } finally {
+      setQrSavingMethod(null);
+    }
+  };
+
+  const handlePaymentQrFile = (method: 'GCash' | 'BPI', e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setToastMessage({ title: 'Error', message: 'Please choose an image file.', type: 'error' });
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setToastMessage({ title: 'Error', message: 'File size too large. Max 5MB.', type: 'error' });
+      return;
+    }
+    const reader = new FileReader();
+    reader.onloadend = () => savePaymentQr(method, { qr_image: reader.result as string });
+    reader.readAsDataURL(file);
+  };
   const [amenityStep, setAmenityStep] = useState<'details' | 'payment'>('details');
   const [amenityFormData, setAmenityFormData] = useState<any>(null);
   const [amenityAmountPaid, setAmenityAmountPaid] = useState<string>('');
@@ -3579,6 +3637,9 @@ export default function App() {
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+        if (data.type === 'PAYMENT_QR_UPDATED') {
+          refreshPaymentQr().catch(console.error);
+        }
         if (data.type === 'POS_TRANSACTION_UPDATED' || data.type === 'AMENITIES_UPDATED') {
           setPosRefreshKey(k => k + 1);
         }
@@ -5357,12 +5418,7 @@ export default function App() {
                 </h4>
                 <div className="flex flex-col items-center gap-6">
                   <div className="bg-white p-4 rounded-2xl shadow-sm border border-coffee-100">
-                    <QRCodeSVG 
-                      value={paymentMethod === 'GCash' ? "GCASH:09123456789" : "BPI:1234567890"} 
-                      size={160}
-                      level="H"
-                      includeMargin={true}
-                    />
+                    <PaymentQrImage method={paymentMethod} info={paymentQr[paymentMethod]} size={192} />
                   </div>
                   <div className="text-center">
                     <p className="text-sm font-bold text-coffee-900">{paymentMethod} QR Code</p>
@@ -7753,6 +7809,55 @@ export default function App() {
                   exit={{ opacity: 0, x: -20 }}
                   className="w-full flex-1 flex flex-col gap-y-8"
                 >
+                  {user?.role === 'admin' && (
+                    <div className="bg-white rounded-3xl border border-[#A3402A]/10 shadow-sm p-6">
+                      <h3 className="text-2xl font-serif font-bold text-[#5C3321] mb-1">Payment QR Codes</h3>
+                      <p className="text-[#A3402A] text-sm font-bold mb-4">Upload the QR image guests will scan. Changes apply immediately.</p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        {(['GCash', 'BPI'] as const).map((m) => (
+                          <div key={m} className="border border-coffee-100 rounded-2xl p-4 flex flex-col items-center gap-3 bg-[#FDF8F3]">
+                            <p className="font-bold text-coffee-900">{m}</p>
+                            <div className="bg-white p-2 rounded-xl shadow-sm">
+                              <PaymentQrImage method={m} info={paymentQr[m]} size={160} />
+                            </div>
+                            {!paymentQr[m]?.qr_image && <p className="text-[10px] text-coffee-400 italic">No QR uploaded yet (showing placeholder)</p>}
+                            <div className="w-full space-y-2">
+                              <input
+                                type="text"
+                                key={`${m}-name-${paymentQr[m]?.account_name}`}
+                                defaultValue={paymentQr[m]?.account_name || ''}
+                                placeholder="Account name"
+                                onBlur={(e) => e.target.value !== (paymentQr[m]?.account_name || '') && savePaymentQr(m, { account_name: e.target.value })}
+                                className="w-full p-2 rounded-xl border border-coffee-200 text-sm outline-none focus:ring-2 focus:ring-coffee-500 bg-white"
+                              />
+                              <input
+                                type="text"
+                                key={`${m}-num-${paymentQr[m]?.account_number}`}
+                                defaultValue={paymentQr[m]?.account_number || ''}
+                                placeholder="Account / mobile number"
+                                onBlur={(e) => e.target.value !== (paymentQr[m]?.account_number || '') && savePaymentQr(m, { account_number: e.target.value })}
+                                className="w-full p-2 rounded-xl border border-coffee-200 text-sm outline-none focus:ring-2 focus:ring-coffee-500 bg-white"
+                              />
+                            </div>
+                            <div className="flex gap-2 w-full">
+                              <label className="flex-1 bg-[#5C3321] text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-[#4A291A] transition-all cursor-pointer text-center">
+                                {qrSavingMethod === m ? 'Saving...' : 'Upload New QR'}
+                                <input type="file" accept="image/*" className="hidden" disabled={qrSavingMethod === m} onChange={(e) => handlePaymentQrFile(m, e)} />
+                              </label>
+                              {paymentQr[m]?.qr_image && (
+                                <button
+                                  onClick={() => savePaymentQr(m, { remove_image: true })}
+                                  className="px-4 py-2 rounded-xl text-xs font-bold border border-red-200 text-red-600 hover:bg-red-50"
+                                >
+                                  Remove
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
                     <div className="flex flex-col gap-1">
                       <h3 className="text-4xl font-serif font-bold text-[#5C3321]">Payment Transactions</h3>
@@ -9037,18 +9142,23 @@ export default function App() {
                             {/* Payment Instructions */}
                             <div className="bg-white p-6 rounded-2xl border border-coffee-200">
                               <h5 className="font-bold text-coffee-900 mb-2">Payment Instructions</h5>
+                              <div className="flex justify-center mb-4">
+                                <div className="bg-white p-2 rounded-xl border border-coffee-100 shadow-sm">
+                                  <PaymentQrImage method={amenityPaymentMethod} info={paymentQr[amenityPaymentMethod]} size={160} />
+                                </div>
+                              </div>
                               {amenityPaymentMethod === 'GCash' ? (
                                 <div className="space-y-2 text-sm text-coffee-600">
                                   <p>1. Open GCash app</p>
-                                  <p>2. Send to: <span className="font-bold text-coffee-900">09123456789</span> (Da Bali Resort)</p>
+                                  <p>2. Send to: <span className="font-bold text-coffee-900">{paymentQr.GCash?.account_number || '09629724075'}</span> ({paymentQr.GCash?.account_name || 'Da Bali Resort'})</p>
                                   <p>3. Amount: <span className="font-bold text-[#A3402A]">₱{((selectedAmenity?.name === 'Infinity Pool' ? calculateAmenityTotalPrice() : calculateAmenityTotalPrice() * 0.5) || 0).toLocaleString()}</span></p>
                                   <p>4. Save the receipt screenshot</p>
                                 </div>
                               ) : (
                                 <div className="space-y-2 text-sm text-coffee-600">
                                   <p>1. Open BPI app or online banking</p>
-                                  <p>2. Transfer to: <span className="font-bold text-coffee-900">1234 5678 90</span></p>
-                                  <p>3. Account Name: Da Bali Resort</p>
+                                  <p>2. Transfer to: <span className="font-bold text-coffee-900">{paymentQr.BPI?.account_number || '1234-5678-90'}</span></p>
+                                  <p>3. Account Name: {paymentQr.BPI?.account_name || 'Da Bali Resort'}</p>
                                   <p>4. Amount: <span className="font-bold text-[#A3402A]">₱{((selectedAmenity?.name === 'Infinity Pool' ? calculateAmenityTotalPrice() : calculateAmenityTotalPrice() * 0.5) || 0).toLocaleString()}</span></p>
                                   <p>5. Save the transfer confirmation</p>
                                 </div>

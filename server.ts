@@ -273,7 +273,19 @@ db.exec(`
     order_index INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS payment_qr_settings (
+    method TEXT PRIMARY KEY,
+    qr_image TEXT,
+    account_name TEXT,
+    account_number TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
 `);
+
+// Seed default payment QR settings (admin can change these from the Payments tab)
+db.prepare("INSERT OR IGNORE INTO payment_qr_settings (method, qr_image, account_name, account_number) VALUES ('GCash', NULL, 'Da Bali Resort', '09629724075')").run();
+db.prepare("INSERT OR IGNORE INTO payment_qr_settings (method, qr_image, account_name, account_number) VALUES ('BPI', NULL, 'Da Bali Resort', '1234-5678-90')").run();
 
 // Migration: Ensure guests_count, extra_bed, and proof_of_payment exist in bookings
 try {
@@ -3126,6 +3138,46 @@ async function startServer() {
     } catch (e) {
       console.error("Delete hero banner error:", e);
       res.status(400).json({ error: "Failed to delete hero banner." });
+    }
+  });
+
+  // Payment QR settings (GCash / BPI) - public read, admin write
+  app.get("/api/payment-qr", (req, res) => {
+    try {
+      const rows = db.prepare("SELECT method, qr_image, account_name, account_number FROM payment_qr_settings").all() as any[];
+      const result: Record<string, any> = {};
+      for (const r of rows) result[r.method] = r;
+      res.json(result);
+    } catch (e) {
+      console.error("Fetch payment QR error:", e);
+      res.status(500).json({ error: "Failed to fetch payment QR settings." });
+    }
+  });
+
+  app.put("/api/payment-qr/:method", isAdmin, (req, res) => {
+    const method = req.params.method;
+    if (method !== 'GCash' && method !== 'BPI') {
+      return res.status(400).json({ error: "Invalid payment method." });
+    }
+    const { qr_image, account_name, account_number, remove_image } = req.body || {};
+    try {
+      if (qr_image !== undefined && qr_image !== null && !/^data:image\/(png|jpe?g|webp|gif);base64,/.test(qr_image)) {
+        return res.status(400).json({ error: "QR image must be a PNG, JPG, WEBP or GIF image." });
+      }
+      const current = db.prepare("SELECT * FROM payment_qr_settings WHERE method = ?").get(method) as any;
+      const newImage = remove_image ? null : (qr_image ?? current?.qr_image ?? null);
+      db.prepare(`
+        INSERT INTO payment_qr_settings (method, qr_image, account_name, account_number, updated_at)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(method) DO UPDATE SET qr_image = excluded.qr_image, account_name = excluded.account_name,
+          account_number = excluded.account_number, updated_at = CURRENT_TIMESTAMP
+      `).run(method, newImage, account_name ?? current?.account_name ?? null, account_number ?? current?.account_number ?? null);
+      logAuditAction(req, 'payment_qr_updated', 'payment_qr', 0, method, { image_changed: qr_image !== undefined || !!remove_image });
+      broadcast({ type: 'PAYMENT_QR_UPDATED' });
+      res.json({ success: true });
+    } catch (e: any) {
+      console.error("Update payment QR error:", e);
+      res.status(500).json({ error: "Failed to update payment QR settings." });
     }
   });
 
