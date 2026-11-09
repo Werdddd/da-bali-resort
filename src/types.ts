@@ -28,6 +28,8 @@ export interface Room {
   beds: string;
   image_url: string;
   images?: string[];
+  // Comma-separated in-room amenities, e.g. "Free Wi-Fi, Air conditioning"
+  amenities?: string | null;
   status: string;
   last_cleaned_at?: string | null;
   housekeeping_notes?: string | null;
@@ -75,6 +77,8 @@ export interface Booking {
   email?: string;
   contact_no?: string;
   guests_count: number;
+  // Children (ages 1-10) among guests_count; for the front desk's records only
+  children_count?: number;
   extra_bed: number;
   admin_notes?: string;
   is_archived?: number;

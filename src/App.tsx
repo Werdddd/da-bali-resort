@@ -1154,6 +1154,38 @@ const CHECKOUT_FEEDBACK_REQUIRED_HINT = 'The guest must submit feedback for thei
 
 const getCheckoutConfirmMessage = () => 'Are you sure you want to check out this reservation?';
 
+// The Check-In button stays disabled (grayscale) until the guest's scheduled date: the
+// room booking's check-in date, or the amenity reservation date. The server enforces the same rule.
+const getScheduledCheckInDate = (booking: Booking | AmenityBooking) =>
+  String(('amenity_name' in booking ? (booking as AmenityBooking).reservation_date : (booking as Booking).check_in) || '').slice(0, 10);
+
+const isCheckInDateReached = (booking: Booking | AmenityBooking, today: string) => {
+  const scheduled = getScheduledCheckInDate(booking);
+  return !scheduled || today >= scheduled;
+};
+
+const getCheckInLockedHint = (booking: Booking | AmenityBooking) => {
+  const scheduled = getScheduledCheckInDate(booking);
+  const label = scheduled ? format(new Date(`${scheduled}T00:00:00`), 'MMM dd, yyyy') : 'the scheduled date';
+  return `Check-in opens on the guest's scheduled date (${label}).`;
+};
+
+const CHECK_IN_LOCKED_CLASS = 'disabled:bg-gray-300 disabled:text-gray-500 disabled:grayscale disabled:cursor-not-allowed disabled:hover:bg-gray-300 disabled:shadow-none';
+
+// Today's local date (yyyy-MM-dd), re-checked every minute so a Check-In button that is open
+// on screen enables itself as soon as the scheduled date arrives.
+const useTodayKey = () => {
+  const [today, setToday] = useState(() => format(new Date(), 'yyyy-MM-dd'));
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const now = format(new Date(), 'yyyy-MM-dd');
+      setToday(prev => (prev === now ? prev : now));
+    }, 60000);
+    return () => clearInterval(timer);
+  }, []);
+  return today;
+};
+
 // Amenity bookings store guest input in one `details` string, built at checkout as
 // "Selected Items: ...\n\nAdditional Details: ..." (or just the guest's text when no items were picked).
 const parseAmenityBookingDetails = (details?: string) => {
@@ -1414,9 +1446,16 @@ const RoomCard = ({ room, onBook }: { room: Room, onBook: (room: Room) => void }
       </div>
       <div className="p-6 flex-1 flex flex-col">
         <h3 className="text-xl font-serif font-bold mb-2 text-coffee-900">{room.name}</h3>
-        <p className="text-coffee-600 text-sm mb-4 line-clamp-2">{room.description}</p>
+        <p className="text-coffee-600 text-sm mb-4 line-clamp-3" title={room.description}>{room.description}</p>
+        {room.amenities && (
+          <div className="flex flex-wrap gap-1.5 mb-4">
+            {room.amenities.split(',').map(a => a.trim()).filter(Boolean).map(a => (
+              <span key={a} className="px-2 py-0.5 rounded-full bg-coffee-50 border border-coffee-100 text-[10px] font-medium text-coffee-700">{a}</span>
+            ))}
+          </div>
+        )}
         <div className="flex items-center justify-between text-xs text-coffee-500 mb-6 mt-auto">
-          <span className="flex items-center"><UserIcon className="h-3 w-3 mr-1" /> Up to {room.capacity} Guests</span>
+          <span className="flex items-center"><UserIcon className="h-3 w-3 mr-1" /> {room.name.includes('Salakot') ? `${room.capacity} Persons (+1 extra bed ₱500)` : `Up to ${room.capacity} Guests`}</span>
           <span className="flex items-center"><Bed className="h-3 w-3 mr-1" /> {room.beds}</span>
         </div>
         <button
@@ -2131,6 +2170,9 @@ const ReceiptModal = ({
   };
 
   const isAmenity = 'amenity_name' in booking;
+  const today = useTodayKey();
+  const checkInOpen = isCheckInDateReached(booking, today);
+  const checkInLockedHint = getCheckInLockedHint(booking);
 
   const [isDownloading, setIsDownloading] = useState(false);
   const handleDownloadInvoice = async () => {
@@ -2240,6 +2282,18 @@ const ReceiptModal = ({
                   <span className="text-coffee-600">Guests</span>
                   <span className="text-coffee-900">{(booking as Booking).guests_count} Person(s)</span>
                 </div>
+                {Number((booking as Booking).children_count) > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-coffee-600">Children (1–10 yrs)</span>
+                    <span className="text-coffee-900">{(booking as Booking).children_count}</span>
+                  </div>
+                )}
+                {Number((booking as Booking).extra_bed) > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-coffee-600">Extra Bed</span>
+                    <span className="text-coffee-900">Yes (₱500/night)</span>
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -2447,6 +2501,11 @@ const ReceiptModal = ({
               <h3 className="text-xs font-bold text-coffee-900 uppercase tracking-widest flex items-center gap-2">
                 <ShieldCheck size={14} className="text-[#A3402A]" /> Admin Action Panel
               </h3>
+              {(booking.status as string) === 'confirmed' && !checkInOpen && (
+                <p className="text-[11px] text-coffee-500 flex items-center gap-1.5">
+                  <Clock size={12} className="flex-shrink-0" /> {checkInLockedHint}
+                </p>
+              )}
 
               <div className="flex flex-wrap gap-2">
                 {isAmenity ? (
@@ -2493,7 +2552,9 @@ const ReceiptModal = ({
                             await onUpdateStatus(booking.id, true, 'checked-in');
                           }
                         }}
-                        className="flex-1 py-2 px-3 bg-blue-600 text-white font-bold text-xs rounded-lg hover:bg-blue-700 transition-all flex items-center justify-center gap-1 shadow-sm"
+                        disabled={!checkInOpen}
+                        title={!checkInOpen ? checkInLockedHint : undefined}
+                        className={`flex-1 py-2 px-3 bg-blue-600 text-white font-bold text-xs rounded-lg hover:bg-blue-700 transition-all flex items-center justify-center gap-1 shadow-sm ${CHECK_IN_LOCKED_CLASS}`}
                       >
                         Check In
                       </button>
@@ -2568,7 +2629,9 @@ const ReceiptModal = ({
                                 await onUpdateStatus(booking.id, isAmenity, 'checked-in');
                               }
                             }}
-                            className="flex-1 py-2 px-3 bg-blue-600 text-white font-bold text-xs rounded-lg hover:bg-blue-700 transition-all flex items-center justify-center gap-1 shadow-sm"
+                            disabled={!checkInOpen}
+                        title={!checkInOpen ? checkInLockedHint : undefined}
+                        className={`flex-1 py-2 px-3 bg-blue-600 text-white font-bold text-xs rounded-lg hover:bg-blue-700 transition-all flex items-center justify-center gap-1 shadow-sm ${CHECK_IN_LOCKED_CLASS}`}
                           >
                             Check In
                           </button>
@@ -2661,7 +2724,9 @@ const ReceiptModal = ({
                                 await onUpdateStatus(booking.id, isAmenity, 'checked-in');
                               }
                             }}
-                            className="flex-1 py-2 px-3 bg-blue-600 text-white font-bold text-xs rounded-lg hover:bg-blue-700 transition-all flex items-center justify-center gap-1 shadow-sm"
+                            disabled={!checkInOpen}
+                        title={!checkInOpen ? checkInLockedHint : undefined}
+                        className={`flex-1 py-2 px-3 bg-blue-600 text-white font-bold text-xs rounded-lg hover:bg-blue-700 transition-all flex items-center justify-center gap-1 shadow-sm ${CHECK_IN_LOCKED_CLASS}`}
                           >
                             Check In
                           </button>
@@ -2820,12 +2885,17 @@ const sanitizePhone = (phone: string) => {
   return `${digits.slice(0, 4)}-${digits.slice(4, 7)}-${digits.slice(7, 11)}`;
 };
 const isValidEmail = (email: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.endsWith('.com');
+// Philippine mobile number: 11 digits starting with 09 (dashes/spaces ignored).
+const isValidPhMobile = (phone: string) => /^09\d{9}$/.test(phone.replace(/\D/g, ''));
 
 // --- Main App Component ---
 
 export default function App() {
   const [toastMessage, setToastMessage] = useState<{title: string, message: string, type: 'success' | 'error' | 'info'} | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<{title: string, message: string, onConfirm: () => void, onCancel: () => void} | null>(null);
+  const todayKey = useTodayKey();
+  // Shown after a successful sign-up (System Revise: users must be notified of the registration).
+  const [registrationNotice, setRegistrationNotice] = useState<{ message: string, emailNotice: string, email: string } | null>(null);
 
   useEffect(() => {
     if (toastMessage) {
@@ -3277,6 +3347,22 @@ export default function App() {
       setResetToken(token);
       setPage('login'); // Keep them on login page but show reset modal
     }
+
+    // Link from the registration email: /?verify_email=<token>
+    const verifyToken = params.get('verify_email');
+    if (verifyToken) {
+      params.delete('verify_email');
+      const query = params.toString();
+      window.history.replaceState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`);
+      fetch(`/api/auth/verify-email?token=${encodeURIComponent(verifyToken)}`)
+        .then(async res => {
+          const data = await res.json().catch(() => ({}));
+          setToastMessage(res.ok
+            ? { title: 'Email verified', message: data.message || 'Your email address has been verified. Thank you!', type: 'success' }
+            : { title: 'Verification failed', message: data.error || 'Invalid or expired verification link.', type: 'error' });
+        })
+        .catch(() => setToastMessage({ title: 'Verification failed', message: 'A network error occurred. Please try again.', type: 'error' }));
+    }
   }, []);
 
   useEffect(() => {
@@ -3296,6 +3382,7 @@ export default function App() {
   });
   const [paymentMethod, setPaymentMethod] = useState<'GCash' | 'BPI'>('GCash');
   const [guestsCount, setGuestsCount] = useState(1);
+  const [childrenCount, setChildrenCount] = useState(0);
   const [extraBed, setExtraBed] = useState(false);
   const [bookingProof, setBookingProof] = useState<string | null>(null);
   const [bookingAmountPaid, setBookingAmountPaid] = useState<string>('');
@@ -4198,6 +4285,11 @@ export default function App() {
         authForm.firstName = sanitizeName(authForm.firstName);
         authForm.lastName = sanitizeName(authForm.lastName);
         authForm.contactNo = sanitizePhone(authForm.contactNo);
+        if (!isValidPhMobile(authForm.contactNo)) {
+          setAuthError('Please enter a valid 11-digit mobile number starting with 09 (e.g. 0917-123-4567).');
+          setIsAuthLoading(false);
+          return;
+        }
       }
 
       const endpoint = authMode === 'login' ? '/api/auth/login' : '/api/auth/register';
@@ -4210,9 +4302,13 @@ export default function App() {
       const data = await res.json();
       if (res.ok) {
         if (authMode === 'register') {
+          // Switching to login clears the form; the notice stays open on top until dismissed.
+          setRegistrationNotice({
+            message: data.message || 'Your account has been successfully registered!',
+            emailNotice: data.emailNotice || 'A confirmation email has been sent to your registered email address. Please check your inbox to verify your email.',
+            email: data.email || authForm.email,
+          });
           setAuthMode('login');
-          setAuthError('Account created successfully! Please sign in.');
-          setAuthForm({ ...authForm, password: '' }); // Clear password for security
           setIsAuthLoading(false);
           return;
         }
@@ -4249,6 +4345,7 @@ export default function App() {
       checkOut: format(addDays(new Date(), 1), 'yyyy-MM-dd')
     });
     setGuestsCount(1);
+    setChildrenCount(0);
     setExtraBed(false);
     setBookingProof(null);
     setBookingAmountPaid('');
@@ -4356,6 +4453,7 @@ export default function App() {
           totalPrice,
           paymentMethod,
           guestsCount,
+          childrenCount: Math.min(childrenCount, guestsCount),
           extraBed: extraBed ? 1 : 0,
           proofOfPayment: bookingProof,
           transactionReference: bookingTransactionReference,
@@ -4549,6 +4647,7 @@ export default function App() {
       }
 
       if (res.ok) {
+        showFrontDeskSuccess(status);
         if (user?.role === 'admin' || user?.role === 'staff') await fetchAdminData();
         else if (user) await fetchUserBookings(user.id);
         return data;
@@ -4562,8 +4661,8 @@ export default function App() {
     }
   };
 
-  const handleUpdateAmenityStatus = async (bookingId: number, status: string) => {
-    if (isUpdatingStatus) return;
+  const handleUpdateAmenityStatus = async (bookingId: number, status: string): Promise<boolean> => {
+    if (isUpdatingStatus) return false;
     setIsUpdatingStatus(bookingId);
     try {
       const res = await fetch(`/api/amenity-bookings/${bookingId}`, {
@@ -4576,8 +4675,10 @@ export default function App() {
         body: JSON.stringify({ status })
       });
       if (res.ok) {
-        if (user?.role === 'admin') await fetchAdminData();
+        showFrontDeskSuccess(status);
+        if (user?.role === 'admin' || user?.role === 'staff') await fetchAdminData();
         else await fetchUserBookings(user!.id);
+        return true;
       } else {
         const data = await res.json().catch(() => ({}));
         setToastMessage({ title: 'Error', message: data.error || 'Failed to update amenity status', type: 'error' });
@@ -4586,6 +4687,18 @@ export default function App() {
       console.error('Failed to update amenity status:', error);
     } finally {
       setIsUpdatingStatus(null);
+    }
+    return false;
+  };
+
+  // Confirmation prompt after a front-desk check-in / check-out (the server also SMSes and emails the guest).
+  const showFrontDeskSuccess = (status: string) => {
+    if (status === 'checked-in') {
+      setToastMessage({ title: 'Guest successfully checked in!', message: 'An SMS and email confirming the check-in have been sent to the guest.', type: 'success' });
+    } else if (status.toLowerCase() === 'completed') {
+      setToastMessage({ title: 'Guest successfully checked out!', message: 'An SMS and email confirming the check-out have been sent to the guest.', type: 'success' });
+    } else if (status === 'confirmed') {
+      setToastMessage({ title: 'Booking confirmed', message: 'The guest has been notified by SMS and email with the booking details.', type: 'success' });
     }
   };
 
@@ -4602,6 +4715,7 @@ export default function App() {
         body: JSON.stringify({ status, admin_notes })
       });
       if (res.ok) {
+        showFrontDeskSuccess(status);
         setShowAmenityProofViewer(null);
         await fetchAdminData();
       } else {
@@ -5258,9 +5372,11 @@ export default function App() {
     const isSalakot = selectedRoom.name.includes('Salakot');
     const isBubu = selectedRoom.name.includes('Bubu');
     
-    const maxCapacity = isSalakot ? (extraBed ? 3 : 2) : (isBubu ? 10 : selectedRoom.capacity);
+    // Salakot: 2 persons, max 3 with the extra bed. Picking 3 guests turns the extra bed on.
+    const maxCapacity = isSalakot ? 3 : (isBubu ? 10 : selectedRoom.capacity);
     const extraBedCost = extraBed ? 500 * nights : 0;
     const totalPrice = (selectedRoom.price * nights) + extraBedCost;
+    const roomAmenities = (selectedRoom.amenities || '').split(',').map(a => a.trim()).filter(Boolean);
 
     return (
       <div className="max-w-5xl mx-auto px-4 py-16">
@@ -5326,22 +5442,45 @@ export default function App() {
 
                 <div>
                   <label className="block text-sm font-medium text-coffee-700 mb-1">Number of Guests (Max {maxCapacity})</label>
-                  <select 
+                  <select
                     value={guestsCount ?? ''}
-                    onChange={(e) => setGuestsCount(parseInt(e.target.value))}
+                    onChange={(e) => {
+                      const count = parseInt(e.target.value);
+                      setGuestsCount(count);
+                      if (childrenCount > count) setChildrenCount(count);
+                      if (isSalakot && count > 2) setExtraBed(true);
+                    }}
                     className="w-full p-3 rounded-xl border border-coffee-200 focus:ring-2 focus:ring-coffee-500 outline-none"
                   >
                     {[...Array(maxCapacity)].map((_, i) => (
-                      <option key={i + 1} value={i + 1}>{i + 1} {i === 0 ? 'Guest' : 'Guests'}</option>
+                      <option key={i + 1} value={i + 1}>
+                        {i + 1} {i === 0 ? 'Guest' : 'Guests'}{isSalakot && i + 1 === 3 ? ' (requires extra bed)' : ''}
+                      </option>
                     ))}
                   </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-coffee-700 mb-1">
+                    Children (ages 1–10) <span className="text-coffee-400 font-normal">· Optional</span>
+                  </label>
+                  <select
+                    value={childrenCount}
+                    onChange={(e) => setChildrenCount(Math.min(parseInt(e.target.value) || 0, guestsCount))}
+                    className="w-full p-3 rounded-xl border border-coffee-200 focus:ring-2 focus:ring-coffee-500 outline-none"
+                  >
+                    {[...Array(guestsCount + 1)].map((_, i) => (
+                      <option key={i} value={i}>{i === 0 ? 'No children' : `${i} ${i === 1 ? 'Child' : 'Children'}`}</option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-coffee-500 mt-1">For our records only. Children are counted in the number of guests above and don't increase the room's maximum capacity.</p>
                 </div>
 
                 {isSalakot && (
                   <div className="flex items-center justify-between p-4 bg-coffee-50 rounded-xl">
                     <div>
                       <p className="font-bold text-coffee-900">Extra Bed</p>
-                      <p className="text-xs text-coffee-600">Add 1 extra bed for ₱500/night (Max 3 people total)</p>
+                      <p className="text-xs text-coffee-600">Add 1 extra bed for ₱500/night (Max 3 people total inside the room)</p>
                     </div>
                     <label className="relative inline-flex items-center cursor-pointer">
                       <input 
@@ -5351,7 +5490,10 @@ export default function App() {
                         onChange={(e) => {
                           setExtraBed(e.target.checked);
                           if (e.target.checked && guestsCount === 2) setGuestsCount(3);
-                          else if (!e.target.checked && guestsCount > 2) setGuestsCount(2);
+                          else if (!e.target.checked && guestsCount > 2) {
+                            setGuestsCount(2);
+                            if (childrenCount > 2) setChildrenCount(2);
+                          }
                         }}
                       />
                       <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-coffee-600"></div>
@@ -5520,10 +5662,23 @@ export default function App() {
               <div className="flex justify-between items-start">
                 <div>
                   <p className="font-bold text-lg">{selectedRoom.name}</p>
-                  <p className="text-coffee-300 text-sm">{selectedRoom.type} • {guestsCount} Guests</p>
+                  <p className="text-coffee-300 text-sm">
+                    {selectedRoom.type} • {guestsCount} {guestsCount === 1 ? 'Guest' : 'Guests'}
+                    {childrenCount > 0 && ` (${childrenCount} ${childrenCount === 1 ? 'child' : 'children'})`}
+                  </p>
                 </div>
                 <p className="font-bold">₱{(selectedRoom.price || 0).toLocaleString()}</p>
               </div>
+              {selectedRoom.description && (
+                <p className="text-sm text-coffee-200 leading-relaxed">{selectedRoom.description}</p>
+              )}
+              {roomAmenities.length > 0 && (
+                <ul className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 text-xs text-coffee-200">
+                  {roomAmenities.map(a => (
+                    <li key={a} className="flex items-center gap-1.5"><CheckCircle2 className="h-3.5 w-3.5 text-coffee-300 flex-shrink-0" />{a}</li>
+                  ))}
+                </ul>
+              )}
               {extraBed && (
                 <div className="flex justify-between text-sm">
                   <p className="text-coffee-300">Extra Bed (₱500 x {nights})</p>
@@ -5754,9 +5909,11 @@ export default function App() {
                 />
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <input 
+                <input
                   name="contactNo"
-                  placeholder="09XX-XXX-XXXX" required
+                  type="tel" inputMode="numeric"
+                  placeholder="Mobile No. (09XX-XXX-XXXX)" required
+                  title="11-digit Philippine mobile number starting with 09"
                   value={authForm.contactNo}
                   className="w-full p-3 rounded-xl border border-coffee-200 focus:ring-2 focus:ring-[#5C3321] outline-none"
                   onChange={e => setAuthForm({...authForm, contactNo: sanitizePhone(e.target.value)})}
@@ -5774,7 +5931,7 @@ export default function App() {
           <input 
             name="username"
             autoComplete="off"
-            placeholder="Username" required
+            placeholder={authMode === 'login' ? 'Username, email, or mobile number' : 'Username'} required
             value={authForm.username}
             className="w-full p-3 rounded-xl border border-coffee-200 focus:ring-2 focus:ring-[#5C3321] outline-none"
             onChange={e => setAuthForm({...authForm, username: e.target.value})}
@@ -7402,9 +7559,10 @@ export default function App() {
                                   </>
                                 ) : (
                                   <>
-                                    <th className="w-[30%] pl-5 lg:pl-8 pr-2 py-3 text-[10px] uppercase tracking-wider font-bold">Guest</th>
-                                    <th className="w-[20%] px-1.5 lg:px-2 py-3 text-[10px] uppercase tracking-wider font-bold">Room</th>
-                                    <th className="w-[24%] px-1.5 lg:px-2 py-3 text-[10px] uppercase tracking-wider font-bold">Dates</th>
+                                    <th className="w-[26%] pl-5 lg:pl-8 pr-2 py-3 text-[10px] uppercase tracking-wider font-bold">Guest</th>
+                                    <th className="w-[18%] px-1.5 lg:px-2 py-3 text-[10px] uppercase tracking-wider font-bold">Amenities</th>
+                                    <th className="w-[20%] px-1.5 lg:px-2 py-3 text-[10px] uppercase tracking-wider font-bold">Dates</th>
+                                    <th className="w-[10%] px-1.5 lg:px-2 py-3 text-[10px] uppercase tracking-wider font-bold">No. of Pax</th>
                                     <th className="w-[12%] px-1.5 lg:px-2 py-3 text-[10px] uppercase tracking-wider font-bold">Amount</th>
                                     <th className="w-[14%] pr-5 lg:pr-8 pl-2 py-3 text-[10px] uppercase tracking-wider font-bold">Status</th>
                                   </>
@@ -7637,9 +7795,12 @@ export default function App() {
                                              <td className="pr-5 lg:pr-8 pl-2 py-3.5">
                                                {booking.status === 'confirmed' && (Number(booking.total_price || 0) - (Number(booking.amount_paid || 0) + Number(booking.balance_amount_paid || 0))) < 0.1 && (
                                                  <button
-                                                   className="px-2 py-1 bg-blue-600 text-white text-[10px] rounded hover:bg-blue-700"
+                                                   disabled={!isCheckInDateReached(booking, todayKey)}
+                                                   title={!isCheckInDateReached(booking, todayKey) ? getCheckInLockedHint(booking) : undefined}
+                                                   className={`px-2 py-1 bg-blue-600 text-white text-[10px] rounded hover:bg-blue-700 ${CHECK_IN_LOCKED_CLASS}`}
                                                    onClick={async (e) => {
                                                      e.stopPropagation();
+                                                     if (!isCheckInDateReached(booking, todayKey)) return;
                                                      const paid = (Number(booking.amount_paid || 0) + Number(booking.balance_amount_paid || 0));
                                                      const total = Number(booking.total_price || 0);
                                                      const bal = total - paid;
@@ -7709,7 +7870,7 @@ export default function App() {
                                         );
                                       }).length === 0 ? (
                                         <tr>
-                                          <td colSpan={5} className="px-8 py-16">
+                                          <td colSpan={6} className="px-8 py-16">
                                             <div className="flex flex-col items-center justify-center bg-[#FDF8F3]/50 rounded-2xl py-12 border border-dashed border-[#A3402A]/20">
                                               <Calendar className="h-12 w-12 text-[#A3402A] mb-4 opacity-30" />
                                               <p className="text-[#A3402A] font-bold text-lg">No reservation records found.</p>
@@ -7763,6 +7924,9 @@ export default function App() {
                                               <Clock className="h-3 w-3 mr-1 text-[#A3402A]/50 flex-shrink-0" />
                                               <span className="truncate">{format(new Date(booking.reservation_date || new Date()), 'MMM dd')} @ {booking.reservation_time}</span>
                                             </div>
+                                          </td>
+                                          <td className="px-1.5 lg:px-2 py-3.5">
+                                            <p className="text-[11px] lg:text-xs font-bold text-[#5C3321] whitespace-nowrap">{booking.pax_count || 1} pax</p>
                                           </td>
                                           <td className="px-1.5 lg:px-2 py-3.5">
                                             <p className="font-bold text-[#5C3321] text-xs whitespace-nowrap">₱{(booking.total_price || 0).toLocaleString()}</p>
@@ -9278,8 +9442,36 @@ export default function App() {
         </div>
       )}
 
+      {registrationNotice && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-labelledby="registration-notice-title">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-8 text-center"
+          >
+            <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-5">
+              <CheckCircle2 className="h-9 w-9" />
+            </div>
+            <h3 id="registration-notice-title" className="text-2xl font-serif font-bold text-coffee-900 mb-3">{registrationNotice.message}</h3>
+            <div className="bg-coffee-50 border border-coffee-100 rounded-2xl p-4 text-sm text-coffee-700 text-left flex gap-3 mb-6">
+              <Mail className="h-5 w-5 text-[#A3402A] flex-shrink-0 mt-0.5" />
+              <p>
+                {registrationNotice.emailNotice}
+                {registrationNotice.email && <span className="block mt-1 font-bold text-coffee-900 break-all">{registrationNotice.email}</span>}
+              </p>
+            </div>
+            <button
+              onClick={() => setRegistrationNotice(null)}
+              className="w-full bg-[#5C3321] text-white py-3 rounded-xl font-bold hover:bg-[#A3402A] transition-all"
+            >
+              Continue to Sign In
+            </button>
+          </motion.div>
+        </div>
+      )}
+
       {showReceipt && (
-        <ReceiptModal 
+        <ReceiptModal
           booking={showReceipt} 
           onClose={() => setShowReceipt(null)} 
           onPay={() => {
@@ -9292,12 +9484,10 @@ export default function App() {
             setShowReceipt(null);
           }}
           onUpdateStatus={async (id, isAmenity, status) => {
-            if (isAmenity) {
-              await handleUpdateAmenityStatus(id, status);
-            } else {
-              await handleUpdateStatus(id, status);
-            }
-            setShowReceipt(prev => prev ? { ...prev, status: status as any } : null);
+            const ok = isAmenity
+              ? await handleUpdateAmenityStatus(id, status)
+              : !!(await handleUpdateStatus(id, status));
+            if (ok) setShowReceipt(prev => prev ? { ...prev, status: status as any } : null);
             await fetchAdminData();
           }}
           onRefresh={fetchAdminData}
@@ -9726,6 +9916,15 @@ export default function App() {
                     onChange={e => setEditingRoom({...editingRoom, images: e.target.value.split(',').map(s => s.trim()).filter(s => s !== '')})}
                     placeholder="https://example.com/img1.jpg, https://example.com/img2.jpg"
                     className="w-full p-3 rounded-xl border border-coffee-200 outline-none focus:ring-2 focus:ring-coffee-500 resize-none"
+                  />
+                </div>
+                <div className="col-span-2">
+                  <label className="block text-xs font-bold text-coffee-500 uppercase mb-1">Room Amenities (Comma separated)</label>
+                  <input
+                    value={editingRoom.amenities ?? ''}
+                    onChange={e => setEditingRoom({...editingRoom, amenities: e.target.value})}
+                    placeholder="Free Wi-Fi, Air conditioning, Complimentary breakfast"
+                    className="w-full p-3 rounded-xl border border-coffee-200 outline-none focus:ring-2 focus:ring-coffee-500"
                   />
                 </div>
                 <div className="col-span-2">

@@ -1,3 +1,4 @@
+import "dotenv/config"; // loads SMTP_* / SEMAPHORE_* / APP_URL from a local .env file
 import express from "express";
 import session from "express-session";
 import { createServer as createViteServer } from "vite";
@@ -175,6 +176,65 @@ const sendEmail = async (to: string, subject: string, text: string, html?: strin
   }
 };
 
+// Philippine mobile numbers are stored as typed (e.g. 0917-123-4567). This returns the
+// canonical 11-digit form (09171234567), or null when it isn't a valid PH mobile number.
+// Accepts 09XXXXXXXXX, 9XXXXXXXXX, 639XXXXXXXXX and +639XXXXXXXXX.
+const normalizePhMobile = (raw: unknown): string | null => {
+  let digits = String(raw ?? '').replace(/\D/g, '');
+  if (digits.startsWith('63') && digits.length === 12) digits = '0' + digits.slice(2);
+  else if (digits.startsWith('9') && digits.length === 10) digits = '0' + digits;
+  return /^09\d{9}$/.test(digits) ? digits : null;
+};
+
+// SMS Service (Semaphore, a Philippine SMS gateway). Without SEMAPHORE_API_KEY the message
+// is only logged to the console, the same way emails are mocked when SMTP isn't configured.
+const sendSms = async (to: string | null | undefined, message: string) => {
+  const number = normalizePhMobile(to);
+  if (!number) {
+    if (to) console.warn(`[SMS] Skipped: "${to}" is not a valid PH mobile number`);
+    return;
+  }
+  try {
+    if (!process.env.SEMAPHORE_API_KEY) {
+      console.log(`[MOCK SMS] To: ${number} | Message: ${message}`);
+      return;
+    }
+    const body = new URLSearchParams({
+      apikey: process.env.SEMAPHORE_API_KEY,
+      number,
+      message,
+    });
+    if (process.env.SEMAPHORE_SENDER_NAME) body.set('sendername', process.env.SEMAPHORE_SENDER_NAME);
+    const res = await fetch('https://api.semaphore.co/api/v4/messages', { method: 'POST', body });
+    if (!res.ok) {
+      console.error(`Failed to send SMS to ${number}: HTTP ${res.status} ${await res.text().catch(() => '')}`);
+      return;
+    }
+    console.log(`SMS sent to ${number}`);
+  } catch (error) {
+    console.error(`Failed to send SMS to ${number}:`, error);
+  }
+};
+
+// Sends the same notice by email and SMS. Never throws, and callers don't await it, so a
+// slow or failing provider can't block or break the action that triggered the notice.
+const notifyGuest = (contact: { email?: string | null, phone?: string | null }, subject: string, emailText: string, smsText: string) => {
+  const jobs: Promise<void>[] = [];
+  if (contact.email) jobs.push(sendEmail(contact.email, subject, emailText));
+  if (contact.phone) jobs.push(sendSms(contact.phone, smsText));
+  return Promise.allSettled(jobs);
+};
+
+const peso = (n: number | null | undefined) => `PHP ${Number(n || 0).toLocaleString('en-PH', { maximumFractionDigits: 2 })}`;
+const formatDateLabel = (value: string | null | undefined) => {
+  if (!value) return 'N/A';
+  const d = new Date(String(value).slice(0, 10) + 'T00:00:00');
+  return isNaN(d.getTime()) ? String(value) : format(d, 'MMM dd, yyyy');
+};
+
+// Local calendar date (server clock, set to Philippine time) as yyyy-MM-dd.
+const todayKey = () => format(new Date(), 'yyyy-MM-dd');
+
 // Initialize Database
 function initializeDatabase() {
   db.exec(`
@@ -342,6 +402,24 @@ try {
 } catch (e) {}
 try {
   db.prepare("ALTER TABLE users ADD COLUMN reset_token_expiry INTEGER").run();
+} catch (e) {}
+// Email verification for new sign-ups. Accounts that existed before this column was added
+// are treated as verified, so nobody already registered is affected.
+try {
+  db.prepare("ALTER TABLE users ADD COLUMN email_verified INTEGER DEFAULT 0").run();
+  db.prepare("UPDATE users SET email_verified = 1").run();
+} catch (e) {}
+try {
+  db.prepare("ALTER TABLE users ADD COLUMN email_verify_token TEXT").run();
+} catch (e) {}
+// Number of children (ages 1-10) in a room booking. Recorded for the front desk only; it
+// is already part of guests_count and never raises the room's capacity.
+try {
+  db.prepare("ALTER TABLE bookings ADD COLUMN children_count INTEGER DEFAULT 0").run();
+} catch (e) {}
+// Comma-separated list of in-room amenities shown on the room card and booking page.
+try {
+  db.prepare("ALTER TABLE rooms ADD COLUMN amenities TEXT").run();
 } catch (e) {}
 
 // Seed hero_banners table with placeholder content if empty
@@ -641,7 +719,11 @@ function folderImages(relDir: string): string[] {
   }
 }
 
-const ROOM_DESCRIPTION_SALAKOT = "A cozy room perfect for couples, featuring a comfortable bed and modern amenities. Standard occupancy is 2 guests, with 1 extra bed available upon request (max 3 guests total).";
+// Salakot room details (System Revise): Room 1 sits next to the swimming pool, which is why
+// it's the guests' favorite and costs more; Rooms 2-4 share one description.
+const ROOM_DESCRIPTION_SALAKOT_1 = "A cozy and comfortable room perfect for couples, featuring modern amenities and a convenient location near the swimming pool, making it one of the most preferred rooms by our guests. Good for 2 persons, with 1 extra bed available for ₱500 (maximum of 3 persons per room).";
+const ROOM_DESCRIPTION_SALAKOT = "Cozy and comfortable rooms perfect for couples, featuring a comfortable bed and modern amenities. Good for 2 persons, with 1 extra bed available for ₱500 (maximum of 3 persons per room).";
+const ROOM_AMENITIES_SALAKOT = "Free Wi-Fi, Air conditioning, Complimentary breakfast, Free access to the swimming pools";
 const roomPhotoFolders: Record<string, string> = {
   "Salakot - Room 1": "ROOMS/SALAKOT ROOM (Regular)/SALAKOT 1",
   "Salakot - Room 2": "ROOMS/SALAKOT ROOM (Regular)/SALAKOT 2",
@@ -660,7 +742,7 @@ if (roomCount.count === 0) {
     const images = roomPhotos(name);
     insertRoom.run(name, type, description, price, capacity, beds, images[0] || "", JSON.stringify(images));
   };
-  seedRoom("Salakot - Room 1", "Standard", ROOM_DESCRIPTION_SALAKOT, 3000, 2, "1 Bed");
+  seedRoom("Salakot - Room 1", "Standard", ROOM_DESCRIPTION_SALAKOT_1, 3000, 2, "1 Bed");
   seedRoom("Salakot - Room 2", "Standard", ROOM_DESCRIPTION_SALAKOT, 2900, 2, "1 Bed");
   seedRoom("Salakot - Room 3", "Standard", ROOM_DESCRIPTION_SALAKOT, 2900, 2, "1 Bed");
   seedRoom("Salakot - Room 4", "Standard", ROOM_DESCRIPTION_SALAKOT, 2900, 2, "1 Bed");
@@ -668,9 +750,11 @@ if (roomCount.count === 0) {
   seedRoom("Bubu Room Suite B", "Family Suite", "Spacious family room with breakfast included. Ideal for large groups.", 6950, 8, "Double Bed");
 } else {
   // Update existing rooms to match new specs
-  db.prepare(`UPDATE rooms SET name = 'Salakot - Room 4', type = 'Standard', price = 2900, description = '${ROOM_DESCRIPTION_SALAKOT}' WHERE name = 'Executive Suite'`).run();
-  db.prepare(`UPDATE rooms SET price = 3000, description = '${ROOM_DESCRIPTION_SALAKOT}' WHERE name = 'Salakot - Room 1'`).run();
-  db.prepare(`UPDATE rooms SET description = '${ROOM_DESCRIPTION_SALAKOT}' WHERE name LIKE 'Salakot%'`).run();
+  db.prepare("UPDATE rooms SET name = 'Salakot - Room 4', type = 'Standard', price = 2900, description = ? WHERE name = 'Executive Suite'").run(ROOM_DESCRIPTION_SALAKOT);
+  db.prepare("UPDATE rooms SET description = ? WHERE name LIKE 'Salakot%' AND name != 'Salakot - Room 1'").run(ROOM_DESCRIPTION_SALAKOT);
+  db.prepare("UPDATE rooms SET price = 3000, description = ? WHERE name = 'Salakot - Room 1'").run(ROOM_DESCRIPTION_SALAKOT_1);
+  db.prepare("UPDATE rooms SET price = 2900, capacity = 2 WHERE name IN ('Salakot - Room 2', 'Salakot - Room 3', 'Salakot - Room 4')").run();
+  db.prepare("UPDATE rooms SET capacity = 2 WHERE name = 'Salakot - Room 1'").run();
   db.prepare("UPDATE rooms SET type = 'Family Suite' WHERE name LIKE 'Bubu Room%'").run();
   // Ensure names are consistent
   db.prepare("UPDATE rooms SET name = 'Bubu Room Suite A' WHERE name LIKE 'Bubu Room%Suite A%' OR name LIKE 'Bubu Room% (Suite A)%'").run();
@@ -682,6 +766,8 @@ if (roomCount.count === 0) {
     if (images.length > 0) updateRoomPhotos.run(images[0], JSON.stringify(images), name);
   }
 }
+// Fill in the Salakot in-room amenities once; an admin can edit them later from Room Management.
+db.prepare("UPDATE rooms SET amenities = ? WHERE name LIKE 'Salakot%' AND (amenities IS NULL OR amenities = '')").run(ROOM_AMENITIES_SALAKOT);
 
 // Sync the amenity galleries with their photo folders. Only amenities still using the
 // original default photos are touched, so images an admin sets later are kept.
@@ -1158,6 +1244,117 @@ async function startServer() {
     }
   };
 
+  // --- Guest notifications (SMS + email) for booking confirmation, check-in and check-out ---
+  type BookingNoticeKind = 'confirmed' | 'checked-in' | 'checked-out';
+  const NOTICE_SUBJECT: Record<BookingNoticeKind, string> = {
+    'confirmed': 'Booking Confirmed',
+    'checked-in': 'Check-In Confirmed',
+    'checked-out': 'Check-Out Confirmed',
+  };
+  const NOTICE_STATUS: Record<BookingNoticeKind, string> = {
+    'confirmed': 'CONFIRMED',
+    'checked-in': 'CHECKED IN',
+    'checked-out': 'CHECKED OUT',
+  };
+  const noticeIntro = (kind: BookingNoticeKind, item: string) =>
+    kind === 'confirmed' ? `Your reservation for ${item} has been successfully confirmed.`
+    : kind === 'checked-in' ? `You have been successfully checked in to ${item}. Enjoy your stay!`
+    : `You have been successfully checked out of ${item}. Thank you for staying with us!`;
+
+  const notifyRoomBooking = (bookingId: number | string, kind: BookingNoticeKind) => {
+    try {
+      const b = db.prepare(`
+        SELECT b.*, r.name as room_name,
+               COALESCE(u.first_name, b.first_name) as guest_first_name,
+               COALESCE(u.last_name, b.last_name) as guest_last_name,
+               COALESCE(u.email, b.email) as guest_email,
+               COALESCE(u.contact_no, b.contact_no) as guest_phone
+        FROM bookings b
+        LEFT JOIN rooms r ON b.room_id = r.id
+        LEFT JOIN users u ON b.user_id = u.id
+        WHERE b.id = ?
+      `).get(bookingId) as any;
+      if (!b) return;
+      const paid = (b.amount_paid || 0) + (b.balance_amount_paid || 0);
+      const balance = Math.max(0, (b.total_price || 0) - paid);
+      const room = b.room_name || 'your room';
+      const name = b.guest_first_name || 'Guest';
+      const lines = [
+        `Hi ${name},`,
+        '',
+        noticeIntro(kind, room),
+        '',
+        'Booking Details',
+        `Reservation Code: ${b.qr_code || `#${b.id}`}`,
+        `Room: ${room}`,
+        `Check-in: ${formatDateLabel(b.check_in)} (2:00 PM)`,
+        `Check-out: ${formatDateLabel(b.check_out)} (12:00 PM)`,
+        `Guests: ${b.guests_count || 1}${b.children_count ? ` (including ${b.children_count} child${b.children_count > 1 ? 'ren' : ''})` : ''}`,
+        `Extra Bed: ${b.extra_bed ? 'Yes' : 'No'}`,
+        `Total Amount: ${peso(b.total_price)}`,
+        `Amount Paid: ${peso(paid)}`,
+        `Remaining Balance: ${peso(balance)}`,
+        `Payment Status: ${b.payment_status || 'Pending'}`,
+        `Status: ${NOTICE_STATUS[kind]}`,
+        '',
+        'For questions, call us at 09629724075.',
+        'Da Bali Resort',
+      ];
+      const sms = `Da Bali Resort: Hi ${name}! ${noticeIntro(kind, room)} Code: ${b.qr_code || `#${b.id}`}, ${formatDateLabel(b.check_in)} to ${formatDateLabel(b.check_out)}, ${b.guests_count || 1} guest(s), Total ${peso(b.total_price)}, Balance ${peso(balance)}. Status: ${NOTICE_STATUS[kind]}.`;
+      notifyGuest({ email: b.guest_email, phone: b.guest_phone }, `Da Bali Resort - ${NOTICE_SUBJECT[kind]} (${b.qr_code || `#${b.id}`})`, lines.join('\n'), sms);
+    } catch (e) {
+      console.error("Failed to send room booking notice:", e);
+    }
+  };
+
+  const notifyAmenityBooking = (bookingId: number | string, kind: BookingNoticeKind) => {
+    try {
+      const b = db.prepare(`
+        SELECT ab.*, a.name as amenity_name, u.first_name, u.email, u.contact_no
+        FROM amenity_bookings ab
+        LEFT JOIN amenities a ON ab.amenity_id = a.id
+        LEFT JOIN users u ON ab.user_id = u.id
+        WHERE ab.id = ?
+      `).get(bookingId) as any;
+      if (!b) return;
+      const paid = (b.amount_paid || 0) + (b.balance_amount_paid || 0);
+      const balance = Math.max(0, (b.total_price || 0) - paid);
+      const amenity = b.amenity_name || 'your amenity reservation';
+      const name = b.first_name || 'Guest';
+      const ref = `AMN-${b.id}`;
+      const lines = [
+        `Hi ${name},`,
+        '',
+        noticeIntro(kind, amenity),
+        '',
+        'Booking Details',
+        `Reference: ${ref}`,
+        `Amenity: ${amenity}`,
+        `Date: ${formatDateLabel(b.reservation_date)}`,
+        `Time: ${b.reservation_time || 'N/A'}`,
+        `No. of Pax: ${b.pax_count || 1}`,
+        `Total Amount: ${peso(b.total_price)}`,
+        `Amount Paid: ${peso(paid)}`,
+        `Remaining Balance: ${peso(balance)}`,
+        `Payment Status: ${b.payment_status || 'Pending'}`,
+        `Status: ${NOTICE_STATUS[kind]}`,
+        '',
+        'For questions, call us at 09629724075.',
+        'Da Bali Resort',
+      ];
+      const sms = `Da Bali Resort: Hi ${name}! ${noticeIntro(kind, amenity)} Ref: ${ref}, ${formatDateLabel(b.reservation_date)} ${b.reservation_time || ''}, ${b.pax_count || 1} pax, Total ${peso(b.total_price)}, Balance ${peso(balance)}. Status: ${NOTICE_STATUS[kind]}.`;
+      notifyGuest({ email: b.email, phone: b.contact_no }, `Da Bali Resort - ${NOTICE_SUBJECT[kind]} (${amenity})`, lines.join('\n'), sms);
+    } catch (e) {
+      console.error("Failed to send amenity booking notice:", e);
+    }
+  };
+
+  // Check-in opens on the guest's scheduled date (server's local date), never before.
+  const checkInNotYetAllowed = (scheduledDate: string | null | undefined) => {
+    const key = String(scheduledDate || '').slice(0, 10);
+    return !!key && todayKey() < key;
+  };
+
   // Auth Routes
   app.get("/api/auth/me", (req, res) => {
     try {
@@ -1176,28 +1373,96 @@ async function startServer() {
   });
 
   app.post("/api/auth/register", (req, res) => {
-    const { username, password, firstName, lastName, contactNo, address, email } = req.body;
+    const { username, password, firstName, lastName, contactNo, address, email } = req.body || {};
+    const cleanUsername = String(username || '').trim();
+    const cleanEmail = String(email || '').trim().toLowerCase();
+    if (!cleanUsername || !password || !String(firstName || '').trim() || !String(lastName || '').trim() || !cleanEmail) {
+      return res.status(400).json({ error: "Please fill in all required fields." });
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return res.status(400).json({ error: "Please provide a valid email address." });
+    }
+    const mobile = normalizePhMobile(contactNo);
+    if (!mobile) {
+      return res.status(400).json({ error: "Please enter a valid Philippine mobile number (e.g. 0917-123-4567)." });
+    }
     try {
+      // One account per mobile number, so the number can be used to sign in and receive SMS.
+      const phoneTaken = db.prepare("SELECT id FROM users WHERE REPLACE(REPLACE(REPLACE(COALESCE(contact_no, ''), '-', ''), ' ', ''), '+63', '0') = ?").get(mobile);
+      if (phoneTaken) {
+        return res.status(400).json({ error: "This mobile number is already registered to another account." });
+      }
+      const duplicate = db.prepare("SELECT id FROM users WHERE username = ? OR LOWER(email) = ?").get(cleanUsername, cleanEmail);
+      if (duplicate) {
+        return res.status(400).json({ error: "Username or email already exists" });
+      }
+
       const hashedPassword = bcrypt.hashSync(password, 10);
-      const info = db.prepare("INSERT INTO users (username, password, first_name, last_name, contact_no, address, email) VALUES (?, ?, ?, ?, ?, ?, ?)").run(username, hashedPassword, firstName, lastName, contactNo, address, email);
-      const user = db.prepare("SELECT id, username, first_name, last_name, email, role, contact_no, address FROM users WHERE id = ?").get(info.lastInsertRowid) as any;
+      const verifyToken = crypto.randomBytes(32).toString("hex");
+      const formattedMobile = `${mobile.slice(0, 4)}-${mobile.slice(4, 7)}-${mobile.slice(7)}`;
+      const info = db.prepare("INSERT INTO users (username, password, first_name, last_name, contact_no, address, email, email_verified, email_verify_token) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)")
+        .run(cleanUsername, hashedPassword, firstName, lastName, formattedMobile, address, cleanEmail, verifyToken);
+      const user = db.prepare("SELECT id, username, first_name, last_name, email, role, contact_no, address, email_verified FROM users WHERE id = ?").get(info.lastInsertRowid) as any;
       if (!user) {
         return res.status(500).json({ error: "Failed to retrieve user after registration" });
       }
       req.session.userId = user.id;
       req.session.userRole = user.role;
-      res.json(user);
+
+      // Registration notices: an email with the verification link, plus a welcome SMS.
+      const verifyLink = `${process.env.APP_URL || 'http://localhost:3000'}/?verify_email=${verifyToken}`;
+      sendEmail(
+        cleanEmail,
+        "Welcome to Da Bali Resort - Please verify your email",
+        `Hi ${firstName},\n\nYour account has been successfully registered!\n\nPlease verify your email address by opening this link:\n${verifyLink}\n\nUsername: ${cleanUsername}\n\nThank you,\nDa Bali Resort`,
+        `<p>Hi ${firstName},</p><p><strong>Your account has been successfully registered!</strong></p><p>Please verify your email address by clicking the link below:</p><p><a href="${verifyLink}">Verify my email</a></p><p>Username: <strong>${cleanUsername}</strong></p><p>Thank you,<br>Da Bali Resort</p>`
+      ).catch(() => {});
+      sendSms(mobile, `Da Bali Resort: Hi ${firstName}, your account has been successfully registered! A confirmation email was sent to ${cleanEmail}. Please verify your email.`).catch(() => {});
+
+      res.json({
+        ...user,
+        message: "Your account has been successfully registered!",
+        emailNotice: "A confirmation email has been sent to your registered email address. Please check your inbox to verify your email."
+      });
     } catch (e) {
+      console.error("Register error:", e);
       res.status(400).json({ error: "Username or email already exists" });
+    }
+  });
+
+  // Opened from the link in the registration email.
+  app.get("/api/auth/verify-email", (req, res) => {
+    try {
+      const token = String(req.query.token || '');
+      if (!/^[a-f0-9]{64}$/.test(token)) {
+        return res.status(400).json({ error: "Invalid or expired verification link." });
+      }
+      const user = db.prepare("SELECT id FROM users WHERE email_verify_token = ?").get(token) as { id: number } | undefined;
+      if (!user) {
+        return res.status(400).json({ error: "Invalid or expired verification link." });
+      }
+      db.prepare("UPDATE users SET email_verified = 1, email_verify_token = NULL WHERE id = ?").run(user.id);
+      res.json({ success: true, message: "Your email address has been verified. Thank you!" });
+    } catch (e) {
+      console.error("Verify email error:", e);
+      res.status(500).json({ error: "Failed to verify email" });
     }
   });
 
   app.post("/api/auth/login", loginIpLimiter, loginAccountLimiter, (req, res) => {
     try {
       const { username, password } = req.body;
-      const user = db.prepare("SELECT * FROM users WHERE username = ? OR email = ?").get(username, username) as any;
+      // Guests can sign in with their username, email, or registered mobile number.
+      const loginMobile = normalizePhMobile(username) || '';
+      const user = db.prepare(`
+        SELECT * FROM users
+        WHERE username = ? OR LOWER(email) = LOWER(?)
+           OR (? != '' AND REPLACE(REPLACE(REPLACE(COALESCE(contact_no, ''), '-', ''), ' ', ''), '+63', '0') = ?)
+        ORDER BY CASE WHEN username = ? THEN 0 WHEN LOWER(email) = LOWER(?) THEN 1 ELSE 2 END
+        LIMIT 1
+      `).get(username, username, loginMobile, loginMobile, username, username) as any;
       if (user && bcrypt.compareSync(password, user.password)) {
-        const { password: _, ...userWithoutPassword } = user;
+        const { password: _, reset_token: _rt, reset_token_expiry: _rte, email_verify_token: _evt, ...userWithoutPassword } = user;
         loginAccountLimiter.reset(req);
         req.session.userId = user.id;
         req.session.userRole = user.role;
@@ -1291,7 +1556,10 @@ async function startServer() {
     if (!userIdToUpdate) {
       return res.status(401).json({ error: "Not authenticated" });
     }
-    
+    if (contactNo && !normalizePhMobile(contactNo)) {
+      return res.status(400).json({ error: "Please enter a valid Philippine mobile number (e.g. 0917-123-4567)." });
+    }
+
     try {
       // Try to find user by ID first
       let user = db.prepare("SELECT * FROM users WHERE id = ?").get(userIdToUpdate) as any;
@@ -1368,9 +1636,9 @@ async function startServer() {
   });
 
   app.post("/api/rooms", isAdmin, (req, res) => {
-    const { name, type, description, price, capacity, beds, image_url, images } = req.body;
+    const { name, type, description, price, capacity, beds, image_url, images, amenities } = req.body;
     try {
-      const info = db.prepare("INSERT INTO rooms (name, type, description, price, capacity, beds, image_url, images) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(name, type, description, price, capacity, beds, image_url, images ? JSON.stringify(images) : "[]");
+      const info = db.prepare("INSERT INTO rooms (name, type, description, price, capacity, beds, image_url, images, amenities) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(name, type, description, price, capacity, beds, image_url, images ? JSON.stringify(images) : "[]", typeof amenities === 'string' ? amenities.trim() : null);
       const room = db.prepare("SELECT * FROM rooms WHERE id = ?").get(info.lastInsertRowid) as any;
       if (!room) {
         return res.status(500).json({ error: "Failed to retrieve room after creation" });
@@ -1390,12 +1658,14 @@ async function startServer() {
 
   app.put("/api/rooms/:id", isAdmin, (req, res) => {
     console.log('PUT /api/rooms/:id body:', req.body);
-    const { name, type, description, price, capacity, beds, image_url, images, status } = req.body;
+    const { name, type, description, price, capacity, beds, image_url, images, status, amenities } = req.body;
     const { id } = req.params;
     console.log('PUT /api/rooms/:id id:', id);
     try {
-      const existing = db.prepare("SELECT status FROM rooms WHERE id = ?").get(id) as { status: string } | undefined;
-      const result = db.prepare("UPDATE rooms SET name = ?, type = ?, description = ?, price = ?, capacity = ?, beds = ?, image_url = ?, images = ?, status = ? WHERE id = ?").run(name, type, description, price, capacity, beds, image_url, images ? JSON.stringify(images) : "[]", status, id);
+      const existing = db.prepare("SELECT status, amenities FROM rooms WHERE id = ?").get(id) as { status: string, amenities: string | null } | undefined;
+      // Older clients may not send `amenities`; keep the stored list in that case.
+      const nextAmenities = typeof amenities === 'string' ? amenities.trim() : (existing?.amenities ?? null);
+      const result = db.prepare("UPDATE rooms SET name = ?, type = ?, description = ?, price = ?, capacity = ?, beds = ?, image_url = ?, images = ?, status = ?, amenities = ? WHERE id = ?").run(name, type, description, price, capacity, beds, image_url, images ? JSON.stringify(images) : "[]", status, nextAmenities, id);
 
       if (result.changes === 0) {
         return res.status(404).json({ error: "Room not found." });
@@ -1644,8 +1914,9 @@ async function startServer() {
 
   app.post("/api/bookings", (req, res) => {
     try {
-      const { userId, roomId, checkIn, checkOut, totalPrice, paymentMethod, guestsCount, extraBed } = req.body;
-      
+      const { userId, roomId, checkIn, checkOut, paymentMethod, guestsCount, extraBed, childrenCount } = req.body;
+      let { totalPrice } = req.body;
+
       // Verify user exists if userId is provided
       if (userId) {
         const user = db.prepare("SELECT id FROM users WHERE id = ?").get(userId);
@@ -1655,14 +1926,40 @@ async function startServer() {
       }
 
       // Verify room exists and is currently bookable
+      const guests = Math.max(1, parseInt(guestsCount, 10) || 1);
+      const children = Math.max(0, parseInt(childrenCount, 10) || 0);
+      let wantsExtraBed = !!Number(extraBed);
       if (roomId) {
-        const room = db.prepare("SELECT id, status FROM rooms WHERE id = ?").get(roomId) as { id: number; status: string } | undefined;
+        const room = db.prepare("SELECT id, name, status, price, capacity FROM rooms WHERE id = ?").get(roomId) as { id: number; name: string; status: string; price: number; capacity: number } | undefined;
         if (!room) {
           return res.status(404).json({ error: "The selected room no longer exists. Please refresh and try again." });
         }
         if (room.status !== 'available') {
           return res.status(400).json({ error: roomUnavailableMessage(room.status) });
         }
+
+        // Salakot rooms: 2 persons, or 3 with the ₱500/night extra bed (max 3 people inside
+        // the room). Children are part of the guest count and never raise the capacity.
+        const isSalakot = (room.name || '').includes('Salakot');
+        const isBubu = (room.name || '').includes('Bubu');
+        if (!isSalakot) wantsExtraBed = false;
+        const maxGuests = isSalakot ? 3 : (isBubu ? 10 : (room.capacity || 1));
+        if (guests > maxGuests) {
+          return res.status(400).json({ error: `This room allows a maximum of ${maxGuests} guests.` });
+        }
+        if (isSalakot && guests > 2 && !wantsExtraBed) {
+          return res.status(400).json({ error: "A third guest requires the extra bed (₱500/night). Please turn on Extra Bed." });
+        }
+        if (children > guests) {
+          return res.status(400).json({ error: "The number of children can't be more than the total number of guests." });
+        }
+
+        // Price from trusted server data: nightly rate x nights, plus the extra bed.
+        const nights = differenceInDays(parseISO(String(checkOut)), parseISO(String(checkIn)));
+        if (!Number.isFinite(nights) || nights <= 0) {
+          return res.status(400).json({ error: "Check-out date must be after the check-in date." });
+        }
+        totalPrice = (Number(room.price) || 0) * nights + (wantsExtraBed ? 500 * nights : 0);
       }
 
       // Final check for availability
@@ -1683,22 +1980,23 @@ async function startServer() {
       const { proofOfPayment, transactionReference, amountPaid } = req.body;
       const status = proofOfPayment ? 'pending_verification' : 'pending';
 
-      const info = db.prepare("INSERT INTO bookings (user_id, room_id, check_in, check_out, total_price, payment_method, qr_code, guests_count, extra_bed, proof_of_payment, transaction_reference, amount_paid, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
-        userId || null, 
-        roomId || null, 
-        checkIn || null, 
-        checkOut || null, 
-        totalPrice || 0, 
-        paymentMethod || 'GCash', 
-        qrCode, 
-        guestsCount || 1, 
-        extraBed ? 1 : 0,
+      const info = db.prepare("INSERT INTO bookings (user_id, room_id, check_in, check_out, total_price, payment_method, qr_code, guests_count, extra_bed, proof_of_payment, transaction_reference, amount_paid, status, children_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+        userId || null,
+        roomId || null,
+        checkIn || null,
+        checkOut || null,
+        totalPrice || 0,
+        paymentMethod || 'GCash',
+        qrCode,
+        guests,
+        wantsExtraBed ? 1 : 0,
         proofOfPayment || null,
         transactionReference || null,
         amountPaid || 0,
-        status
+        status,
+        Math.min(children, guests)
       );
-      
+
       const booking = db.prepare("SELECT * FROM bookings WHERE id = ?").get(info.lastInsertRowid);
       if (!booking) {
         return res.status(500).json({ error: "Failed to retrieve booking after creation" });
@@ -1724,8 +2022,15 @@ async function startServer() {
       }
 
       if (status) {
+        // Front-desk actions: only staff/admin can check a guest in or out.
+        if ((status === 'checked-in' || String(status).toLowerCase() === 'completed') && !getAuthContext(req).isStaff) {
+          return res.status(403).json({ error: "Unauthorized: Staff or admin access required" });
+        }
         if (status === 'checked-in') {
-          const booking = db.prepare("SELECT payment_status FROM bookings WHERE id = ?").get(id) as { payment_status: string } | undefined;
+          const booking = db.prepare("SELECT payment_status, check_in FROM bookings WHERE id = ?").get(id) as { payment_status: string, check_in: string } | undefined;
+          if (booking && checkInNotYetAllowed(booking.check_in)) {
+            return res.status(400).json({ error: `Check-in is only available on the guest's scheduled check-in date (${formatDateLabel(booking.check_in)}).` });
+          }
           if (booking && booking.payment_status !== 'Fully Paid') {
             return res.status(400).json({ error: "Guest cannot check-in until the balance is fully paid." });
           }
@@ -1825,6 +2130,11 @@ async function startServer() {
       if (admin_notes !== undefined) {
         logAuditAction(req, 'booking_notes_updated', 'booking', id, guestLabel);
       }
+
+      // Let the guest know by SMS and email.
+      if (status === 'confirmed') notifyRoomBooking(id, 'confirmed');
+      else if (status === 'checked-in' && beforeBooking?.status !== 'checked-in') notifyRoomBooking(id, 'checked-in');
+      else if (String(status).toLowerCase() === 'completed' && beforeBooking?.status === 'checked-in') notifyRoomBooking(id, 'checked-out');
 
       // Broadcast update
       broadcast({ type: 'BOOKING_UPDATED', booking });
@@ -2047,6 +2357,7 @@ async function startServer() {
 
       const guestLabel = booking ? `${booking.first_name || ''} ${booking.last_name || ''}`.trim() || `Booking #${id}` : `Booking #${id}`;
       logAuditAction(req, 'payment_verified', 'booking', id, guestLabel, { to: 'confirmed' });
+      if (booking) notifyRoomBooking(id, 'confirmed');
       broadcast({ type: 'BOOKING_UPDATED' });
       res.json({ success: true, qrCode });
     } catch (e) {
@@ -2765,6 +3076,9 @@ async function startServer() {
         // settle the remaining amount beforehand; the admin cannot bypass this by
         // calling the API directly even though the UI already hides the button.
         if (status === 'checked-in') {
+          if (checkInNotYetAllowed(existingBooking.reservation_date)) {
+            return res.status(400).json({ error: `Check-in is only available on the guest's scheduled reservation date (${formatDateLabel(existingBooking.reservation_date)}).` });
+          }
           const totalPaid = (existingBooking.amount_paid || 0) + (existingBooking.balance_amount_paid || 0);
           const totalPrice = existingBooking.total_price || 0;
           if (totalPaid < totalPrice - 0.1) {
@@ -2842,6 +3156,11 @@ async function startServer() {
         if (admin_notes !== undefined) {
           logAuditAction(req, 'amenity_booking_notes_updated', 'amenity_booking', id, amenityLabel);
         }
+
+        // Let the guest know by SMS and email.
+        if (status === 'confirmed') notifyAmenityBooking(id, 'confirmed');
+        else if (status === 'checked-in' && existingBooking.status !== 'checked-in') notifyAmenityBooking(id, 'checked-in');
+        else if (status === 'Completed' && existingBooking.status === 'checked-in') notifyAmenityBooking(id, 'checked-out');
       }
 
       broadcast({ type: 'AMENITY_BOOKING_UPDATED', booking });
