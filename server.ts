@@ -1,4 +1,4 @@
-import "dotenv/config"; // loads SMTP_* / SEMAPHORE_* / APP_URL from a local .env file
+import "dotenv/config"; // loads SMTP_* / TEXTBEE_* / APP_URL from a local .env file
 import express from "express";
 import session from "express-session";
 import { createServer as createViteServer } from "vite";
@@ -186,8 +186,10 @@ const normalizePhMobile = (raw: unknown): string | null => {
   return /^09\d{9}$/.test(digits) ? digits : null;
 };
 
-// SMS Service (Semaphore, a Philippine SMS gateway). Without SEMAPHORE_API_KEY the message
-// is only logged to the console, the same way emails are mocked when SMTP isn't configured.
+// SMS Service (TextBee, https://textbee.dev). TextBee sends the SMS through an Android phone
+// that is registered as a gateway device on your TextBee account. Without TEXTBEE_API_KEY and
+// TEXTBEE_DEVICE_ID the message is only logged to the console, the same way emails are mocked
+// when SMTP isn't configured.
 const sendSms = async (to: string | null | undefined, message: string) => {
   const number = normalizePhMobile(to);
   if (!number) {
@@ -195,22 +197,31 @@ const sendSms = async (to: string | null | undefined, message: string) => {
     return;
   }
   try {
-    if (!process.env.SEMAPHORE_API_KEY) {
+    const apiKey = process.env.TEXTBEE_API_KEY;
+    const deviceId = process.env.TEXTBEE_DEVICE_ID;
+    if (!apiKey || !deviceId) {
       console.log(`[MOCK SMS] To: ${number} | Message: ${message}`);
       return;
     }
-    const body = new URLSearchParams({
-      apikey: process.env.SEMAPHORE_API_KEY,
-      number,
-      message,
+    const baseUrl = (process.env.TEXTBEE_BASE_URL || 'https://api.textbee.dev/api/v1').replace(/\/+$/, '');
+    const res = await fetch(`${baseUrl}/gateway/devices/${encodeURIComponent(deviceId)}/send-sms`, {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        recipients: ['+63' + number.slice(1)], // TextBee wants international format
+        message,
+      }),
     });
-    if (process.env.SEMAPHORE_SENDER_NAME) body.set('sendername', process.env.SEMAPHORE_SENDER_NAME);
-    const res = await fetch('https://api.semaphore.co/api/v4/messages', { method: 'POST', body });
+    const text = await res.text().catch(() => '');
     if (!res.ok) {
-      console.error(`Failed to send SMS to ${number}: HTTP ${res.status} ${await res.text().catch(() => '')}`);
+      console.error(`Failed to send SMS to ${number}: HTTP ${res.status} ${text}`);
       return;
     }
-    console.log(`SMS sent to ${number}`);
+    console.log(`SMS queued via TextBee for ${number}`);
   } catch (error) {
     console.error(`Failed to send SMS to ${number}:`, error);
   }
@@ -666,6 +677,14 @@ db.exec(`
     query TEXT NOT NULL,
     user_id INTEGER,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  -- Editable homepage copy (About Us, Vision, Mission). A missing key means the site
+  -- falls back to its built-in default text.
+  CREATE TABLE IF NOT EXISTS site_content (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
 
@@ -1417,7 +1436,9 @@ async function startServer() {
         `Hi ${firstName},\n\nYour account has been successfully registered!\n\nPlease verify your email address by opening this link:\n${verifyLink}\n\nUsername: ${cleanUsername}\n\nThank you,\nDa Bali Resort`,
         `<p>Hi ${firstName},</p><p><strong>Your account has been successfully registered!</strong></p><p>Please verify your email address by clicking the link below:</p><p><a href="${verifyLink}">Verify my email</a></p><p>Username: <strong>${cleanUsername}</strong></p><p>Thank you,<br>Da Bali Resort</p>`
       ).catch(() => {});
-      sendSms(mobile, `Da Bali Resort: Hi ${firstName}, your account has been successfully registered! A confirmation email was sent to ${cleanEmail}. Please verify your email.`).catch(() => {});
+      // Worded to pass the SMS gateway's spam filter: the earlier text (with "successfully registered",
+      // "confirmation email", "verify" and the email address) was rejected as spam.
+      sendSms(mobile, `Da Bali Resort: Hi ${firstName}, welcome! Your sign-up is complete. Please check your email inbox to finish setting up. Thank you!`).catch(() => {});
 
       res.json({
         ...user,
@@ -3354,6 +3375,41 @@ async function startServer() {
     } catch (e) {
       console.error("Delete feedback error:", e);
       res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // About Us / Vision / Mission content (managed from the Slideshow Management tab)
+  const SITE_CONTENT_KEYS = ['about_us', 'vision', 'mission'];
+  app.get("/api/site-content", (req, res) => {
+    try {
+      const rows = db.prepare("SELECT key, value FROM site_content").all() as { key: string, value: string }[];
+      res.json(Object.fromEntries(rows.map(r => [r.key, r.value])));
+    } catch (e) {
+      console.error("Fetch site content error:", e);
+      res.status(500).json({ error: "Failed to fetch site content." });
+    }
+  });
+
+  app.put("/api/site-content", isAdmin, (req, res) => {
+    try {
+      const body = req.body || {};
+      const upsert = db.prepare(`
+        INSERT INTO site_content (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+      `);
+      const remove = db.prepare("DELETE FROM site_content WHERE key = ?");
+      for (const key of SITE_CONTENT_KEYS) {
+        if (typeof body[key] !== 'string') continue;
+        const value = body[key].trim();
+        if (value.length > 10000) return res.status(400).json({ error: "Content is too long." });
+        if (value) upsert.run(key, value); else remove.run(key); // blank = restore default
+      }
+      console.log(`Admin ${req.session.userId} updated About Us / Vision / Mission content`);
+      broadcast({ type: 'SITE_CONTENT_UPDATED' });
+      res.json({ success: true });
+    } catch (e: any) {
+      console.error("Update site content error:", e);
+      res.status(500).json({ error: "Failed to update site content." });
     }
   });
 

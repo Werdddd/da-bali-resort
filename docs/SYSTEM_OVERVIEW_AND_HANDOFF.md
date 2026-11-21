@@ -109,8 +109,8 @@ Use this for the "Tools / Technologies Used" and "Development Environment" parts
 | Database | **SQLite** via **better-sqlite3** | Single-file DB (`resort.db`), WAL mode, foreign keys on |
 | Auth | **express-session** + **bcryptjs** | Cookie sessions; passwords hashed with bcrypt (10 rounds) |
 | Email | **Nodemailer** (SMTP) | Registration/verification, booking confirmation, check-in/out, password reset, pre-arrival, and post-checkout emails (mocked to console when SMTP isn't configured) |
-| SMS | **Semaphore** API (Philippine SMS gateway), called with Node's built-in `fetch` | Registration, booking confirmation, and check-in/out texts (mocked to console when `SEMAPHORE_API_KEY` isn't set) |
-| Config | **dotenv** | Loads `SMTP_*`, `SEMAPHORE_*`, and `APP_URL` from a local `.env` file |
+| SMS | **TextBee** API (Android-phone SMS gateway), called with Node's built-in `fetch` | Registration, booking confirmation, and check-in/out texts (mocked to console when `TEXTBEE_API_KEY` / `TEXTBEE_DEVICE_ID` aren't set) |
+| Config | **dotenv** | Loads `SMTP_*`, `TEXTBEE_*`, and `APP_URL` from a local `.env` file |
 | PDF | **PDFKit** | Invoices and POS official receipts ([pdf-invoice.ts](../pdf-invoice.ts)) |
 | Runtime tooling | **tsx** (dev), **esbuild** (prod server bundle) | |
 
@@ -140,7 +140,7 @@ flowchart LR
 
   DB[(SQLite<br/>resort.db)]
   SMTP[[SMTP email]]
-  SMS[[Semaphore SMS API]]
+  SMS[[TextBee SMS API]]
 
   G -- HTTPS JSON + cookie --> MW --> API
   A -- HTTPS JSON + cookie --> MW
@@ -154,7 +154,7 @@ flowchart LR
   API --> SMS
 ```
 
-**Guest notifications:** `notifyGuest()` sends the same notice by email (`sendEmail`) and SMS (`sendSms`). It's fire-and-forget: the API responds without waiting, and a provider failure is only logged, so it never blocks or breaks the action that triggered it. Without `SMTP_USER` or `SEMAPHORE_API_KEY`, the message is printed to the server console as `[MOCK EMAIL]` / `[MOCK SMS]`.
+**Guest notifications:** `notifyGuest()` sends the same notice by email (`sendEmail`) and SMS (`sendSms`). It's fire-and-forget: the API responds without waiting, and a provider failure is only logged, so it never blocks or breaks the action that triggered it. Without `SMTP_USER` or `TEXTBEE_API_KEY`, the message is printed to the server console as `[MOCK EMAIL]` / `[MOCK SMS]`.
 
 **Real-time updates:** after any change (booking created or updated, room or housekeeping change, POS sale, feedback, banner edit, and so on), the server broadcasts one of 12 event types: `BOOKING_CREATED`, `BOOKING_UPDATED`, `AMENITY_BOOKING_CREATED`, `AMENITY_BOOKING_UPDATED`, `AMENITIES_UPDATED`, `ROOMS_UPDATED`, `HOUSEKEEPING_UPDATED`, `POS_TRANSACTION_UPDATED`, `DTR_UPDATED`, `FEEDBACK_ADDED`, `HERO_BANNERS_UPDATED`, or `PAYMENT_REJECTED`. Open browsers then re-fetch the affected data. Events carry no personal data, except `PAYMENT_REJECTED`, which the client shows only to the matching guest. Chat messages use **polling** (every 30–60 s) rather than WebSocket.
 
@@ -333,7 +333,7 @@ src/AMENITIES/<amenity>/       Amenity photos, one folder per amenity (first fil
 | Checked in | Staff checks the guest in | Same details, **Status: CHECKED IN** |
 | Checked out | Staff checks the guest out (`checked-in` → `Completed`) | Same details, **Status: CHECKED OUT** (in addition to the existing post-checkout thank-you email) |
 
-- **SMS provider:** Semaphore (`POST https://api.semaphore.co/api/v4/messages`). Numbers are normalized to `09XXXXXXXXX`; invalid numbers are skipped with a console warning. Room booking notices use the guest account's email/phone (or the walk-in fields on older walk-in records).
+- **SMS provider:** TextBee (`POST https://api.textbee.dev/api/v1/gateway/devices/{deviceId}/send-sms`, `x-api-key` header). Numbers are normalized to `09XXXXXXXXX` and sent as `+639XXXXXXXXX`; invalid numbers are skipped with a console warning. Room booking notices use the guest account's email/phone (or the walk-in fields on older walk-in records).
 
 ---
 
@@ -627,7 +627,7 @@ npm run lint         # type-check (tsc --noEmit)
 - **Environment variables** (copy `.env.example` to `.env`; the server loads it on start):
   - `APP_URL`: public site URL, used in password-reset and email-verification links.
   - `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`: email. For Gmail use `smtp.gmail.com`, port 465, `SMTP_SECURE=true`, and a Google App Password. Without `SMTP_USER`, emails are only printed as `[MOCK EMAIL]`.
-  - `SEMAPHORE_API_KEY`, `SEMAPHORE_SENDER_NAME` (optional, must be approved on the Semaphore account): SMS. Without the key, texts are only printed as `[MOCK SMS]`. Semaphore charges per message, so load credits before going live.
+  - `TEXTBEE_API_KEY`, `TEXTBEE_DEVICE_ID` (and optional `TEXTBEE_BASE_URL` for self-hosting): SMS. Without them, texts are only printed as `[MOCK SMS]`. TextBee sends through a registered Android phone, so keep that phone online with a SIM and load.
 - The server clock must be on Philippine time (UTC+8): the Check-In date lock and DTR use it.
 - Helper scripts in the repo root (`check_rooms.js`, `restore_room.js`, `remove_booking.ts`, `check_admin_bookings.ts`, `test-db.ts`, `test_put.js`) and `dump.sql` are developer utilities, not part of the app.
 
@@ -652,7 +652,7 @@ This section is for honest reporting in Chapter 4 and for **recommendations in C
 
 ### Functional / data
 - **Payment verification is manual.** There's no GCash/BPI API integration: guests pay through the admin-configured QR codes/account details and staff verify the uploaded proof.
-- **SMS and email need provider accounts.** Without `SEMAPHORE_API_KEY` / SMTP settings, notices are only logged to the console. Delivery failures are logged, not retried, and there's no record of sent notices besides the server log.
+- **SMS and email need provider accounts.** Without `TEXTBEE_API_KEY` / SMTP settings, notices are only logged to the console. Delivery failures are logged, not retried, and there's no record of sent notices besides the server log.
 - **Email verification is informational.** Unverified accounts can still sign in and book, and there's no "resend verification email" button yet.
 - **One account per mobile number** is checked only at registration; accounts created before Nov 9 may share a number, and profile edits don't re-check it. Sign-in by mobile picks the first matching account.
 - The Salakot descriptions and rates are **re-applied on every server start**, so admin edits to them in Room Management don't persist (the amenities list does).
@@ -707,7 +707,7 @@ Topics that match what was built: online hotel/resort reservation systems, e-pay
 
 ### Chapter 3: Methodology
 - **Development model:** iterative/Agile, supported by the §13 timeline (feature increments every few days).
-- **Architecture diagram:** §4. **Context diagram / DFD:** external entities are Guest, Staff, Housekeeping, Admin, the Email (SMTP) server, and the SMS gateway (Semaphore).
+- **Architecture diagram:** §4. **Context diagram / DFD:** external entities are Guest, Staff, Housekeeping, Admin, the Email (SMTP) server, and the SMS gateway (TextBee).
 - **Use-case diagram:** actors and use cases from §2 and §5.
 - **Activity/sequence diagrams:** §6 (including guest registration, §6.2a, and staff onboarding and attendance, §6.6). **State diagrams:** §7. **ERD and data dictionary:** §8.
 - **Tools:** §3. **Algorithms worth describing:** FAQ matching (§5.13), occupancy computation (§5.11), deposit computation (§5.4), DTR late detection (§5.10), staff username/password generation (§5.10), and stay-extension buffer (§5.3).
@@ -788,7 +788,7 @@ Per the project instructions (`AGENTS.md`), the **hero slideshow settings are to
 | **Audit log** | Permanent record of who did what in the back office |
 | **Unmatched query** | A chatbot question with no FAQ scoring ≥ 0.75, logged for the admin |
 | **Email verification** | Confirming a new account's email by opening the link sent at registration |
-| **Mock email / SMS** | A notice printed to the server console (`[MOCK EMAIL]`, `[MOCK SMS]`) because SMTP or Semaphore isn't configured |
-| **Semaphore** | The Philippine SMS gateway used to send text notifications |
+| **Mock email / SMS** | A notice printed to the server console (`[MOCK EMAIL]`, `[MOCK SMS]`) because SMTP or TextBee isn't configured |
+| **TextBee** | The SMS gateway (an Android phone registered to a TextBee account) used to send text notifications |
 | **No. of Pax** | Number of persons in an amenity reservation (`pax_count`) |
 | **Void** | Admin cancellation of a completed POS sale (kept on record with a reason) |

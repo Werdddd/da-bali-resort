@@ -733,33 +733,36 @@ const Footer = ({ onNavigate }: { onNavigate: (page: string) => void }) => (
 
 const FEEDBACK_RATING_LABELS = ['', 'Poor', 'Fair', 'Good', 'Very Good', 'Excellent'];
 
-const AboutStory = () => {
+const DEFAULT_ABOUT_US = [
+  'Da Bali Resort is a Balinese-inspired destination resort located in the scenic and sunset capital municipality of Balingasag, Misamis Oriental. Inspired by the beauty and serenity, the resort offers guests a peaceful escape from the fast-paced urban lifestyle and immerses them in a tropical environment centered on nature, relaxation, and Balinese aesthetics.',
+  'The name “Da Bali” was creatively derived from the owners’ family name, Dandan combined with Balingasag, the town where the resort is located. The name reflects both the family’s identity and the resort’s vision of bringing a Bali-like experience to Northern Mindanao.',
+  'Surrounded by lush greenery and calming landscapes, Da Bali Resort provides a unique atmosphere where guests can feel transported to another country while remaining close to home. The resort combines natural beauty, cultural inspiration, and modern comfort to create a sanctuary for rest, recreation, and meaningful experiences.',
+  'One of the resort’s most distinctive features is its naturally fresh water sourced directly from the mountains of Balingasag. Unlike heavily treated pool systems, the resort uses clean flowing spring water, providing guests with a refreshing and natural swimming experience that highlights the purity and richness of the local environment.',
+].join('\n\n');
+const DEFAULT_VISION = 'To become one of Northern Mindanao’s premier nature-inspired resorts, recognized for delivering an authentic tropical escape that promotes relaxation, cultural appreciation, sustainability, and exceptional hospitality.';
+const DEFAULT_MISSION = 'Da Bali Resort is committed to providing guests with a refreshing and memorable retreat through excellent service, nature-centered experiences, and a serene Balinese-inspired environment that nurtures comfort, leisure, and connection with nature.';
+
+type SiteContent = { about_us: string; vision: string; mission: string };
+
+const AboutStory = ({ content }: { content: string }) => {
   const [expanded, setExpanded] = useState(false);
+  const paragraphs = content.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+  const [first, ...rest] = paragraphs;
   return (
     <>
-      <p className="text-coffee-600 leading-relaxed">
-        Da Bali Resort is a Balinese-inspired destination resort located in the scenic and sunset capital municipality of Balingasag, Misamis Oriental. Inspired by the beauty and serenity, the resort offers guests a peaceful escape from the fast-paced urban lifestyle and immerses them in a tropical environment centered on nature, relaxation, and Balinese aesthetics.
-      </p>
-      {expanded && (
-        <>
-          <p className="text-coffee-600 leading-relaxed">
-            The name “Da Bali” was creatively derived from the owners’ family name, Dandan combined with Balingasag, the town where the resort is located. The name reflects both the family’s identity and the resort’s vision of bringing a Bali-like experience to Northern Mindanao.
-          </p>
-          <p className="text-coffee-600 leading-relaxed">
-            Surrounded by lush greenery and calming landscapes, Da Bali Resort provides a unique atmosphere where guests can feel transported to another country while remaining close to home. The resort combines natural beauty, cultural inspiration, and modern comfort to create a sanctuary for rest, recreation, and meaningful experiences.
-          </p>
-          <p className="text-coffee-600 leading-relaxed">
-            One of the resort’s most distinctive features is its naturally fresh water sourced directly from the mountains of Balingasag. Unlike heavily treated pool systems, the resort uses clean flowing spring water, providing guests with a refreshing and natural swimming experience that highlights the purity and richness of the local environment.
-          </p>
-        </>
+      <p className="text-coffee-600 leading-relaxed whitespace-pre-line">{first}</p>
+      {expanded && rest.map((para, i) => (
+        <p key={i} className="text-coffee-600 leading-relaxed whitespace-pre-line">{para}</p>
+      ))}
+      {rest.length > 0 && (
+        <button
+          type="button"
+          onClick={() => setExpanded(!expanded)}
+          className="text-[#A3402A] font-bold text-sm hover:underline"
+        >
+          {expanded ? 'Show less' : 'Read our story'}
+        </button>
       )}
-      <button
-        type="button"
-        onClick={() => setExpanded(!expanded)}
-        className="text-[#A3402A] font-bold text-sm hover:underline"
-      >
-        {expanded ? 'Show less' : 'Read our story'}
-      </button>
     </>
   );
 };
@@ -3291,6 +3294,55 @@ export default function App() {
     fetchHeroBanners().catch(console.error);
   }, []);
 
+  // About Us / Vision / Mission copy, editable from Slideshow Management
+  const [siteContent, setSiteContent] = useState<SiteContent>({ about_us: DEFAULT_ABOUT_US, vision: DEFAULT_VISION, mission: DEFAULT_MISSION });
+  const [siteContentForm, setSiteContentForm] = useState<SiteContent>({ about_us: DEFAULT_ABOUT_US, vision: DEFAULT_VISION, mission: DEFAULT_MISSION });
+  const [isSavingSiteContent, setIsSavingSiteContent] = useState(false);
+
+  const fetchSiteContent = async () => {
+    try {
+      const res = await fetch('/api/site-content');
+      if (!res.ok) return;
+      const data = await res.json();
+      const next: SiteContent = {
+        about_us: data.about_us || DEFAULT_ABOUT_US,
+        vision: data.vision || DEFAULT_VISION,
+        mission: data.mission || DEFAULT_MISSION,
+      };
+      setSiteContent(next);
+      setSiteContentForm(next);
+    } catch (error) {
+      console.error('Failed to fetch site content:', error);
+    }
+  };
+
+  const handleSaveSiteContent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingSiteContent(true);
+    try {
+      const res = await fetch('/api/site-content', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(siteContentForm),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to save content');
+      }
+      await fetchSiteContent();
+      setToastMessage({ title: 'Success', message: 'About Us, Vision and Mission updated.', type: 'success' });
+    } catch (error) {
+      setToastMessage({ title: 'Error', message: error instanceof Error ? error.message : 'Failed to save content.', type: 'error' });
+    } finally {
+      setIsSavingSiteContent(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchSiteContent().catch(console.error);
+  }, []);
+
   useEffect(() => {
     if (page === 'home') {
       setCurrentSlide(0);
@@ -3730,10 +3782,11 @@ export default function App() {
         if (data.type === 'POS_TRANSACTION_UPDATED' || data.type === 'AMENITIES_UPDATED') {
           setPosRefreshKey(k => k + 1);
         }
-        if (data.type === 'BOOKING_CREATED' || data.type === 'BOOKING_UPDATED' || data.type === 'FEEDBACK_ADDED' || data.type === 'DTR_UPDATED' || data.type === 'HERO_BANNERS_UPDATED' || data.type === 'AMENITY_BOOKING_UPDATED' || data.type === 'AMENITY_BOOKING_CREATED' || data.type === 'AMENITIES_UPDATED' || data.type === 'HOUSEKEEPING_UPDATED' || data.type === 'ROOMS_UPDATED') {
+        if (data.type === 'BOOKING_CREATED' || data.type === 'BOOKING_UPDATED' || data.type === 'FEEDBACK_ADDED' || data.type === 'DTR_UPDATED' || data.type === 'HERO_BANNERS_UPDATED' || data.type === 'SITE_CONTENT_UPDATED' || data.type === 'AMENITY_BOOKING_UPDATED' || data.type === 'AMENITY_BOOKING_CREATED' || data.type === 'AMENITIES_UPDATED' || data.type === 'HOUSEKEEPING_UPDATED' || data.type === 'ROOMS_UPDATED') {
           fetchRooms().catch(console.error);
           fetchFeedbacks().catch(console.error);
           fetchHeroBanners().catch(console.error);
+          if (data.type === 'SITE_CONTENT_UPDATED') fetchSiteContent().catch(console.error);
           if (data.type === 'AMENITY_BOOKING_UPDATED' || data.type === 'AMENITY_BOOKING_CREATED' || data.type === 'AMENITIES_UPDATED') {
             // Stock/price live on the amenities list, which only these events can change.
             fetchAmenities().catch(console.error);
@@ -5036,7 +5089,7 @@ export default function App() {
           <div className="space-y-6">
             <p className="text-[#A3402A] font-bold uppercase tracking-widest text-sm mb-2">About Us</p>
             <h2 className="text-4xl font-serif font-bold text-coffee-900">Experience the Serenity of Da Bali Resort</h2>
-            <AboutStory />
+            <AboutStory content={siteContent.about_us} />
           </div>
         </div>
         <div className="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-2 gap-6 mt-16">
@@ -5047,9 +5100,7 @@ export default function App() {
               </div>
               <p className="font-serif font-bold text-lg text-coffee-900">Vision</p>
             </div>
-            <p className="text-sm text-coffee-600 leading-relaxed">
-              To become one of Northern Mindanao’s premier nature-inspired resorts, recognized for delivering an authentic tropical escape that promotes relaxation, cultural appreciation, sustainability, and exceptional hospitality.
-            </p>
+            <p className="text-sm text-coffee-600 leading-relaxed whitespace-pre-line">{siteContent.vision}</p>
           </div>
           <div className="bg-[#FCFBF9] border border-coffee-200 rounded-2xl p-6 shadow-sm">
             <div className="flex items-center space-x-3 mb-3">
@@ -5058,9 +5109,7 @@ export default function App() {
               </div>
               <p className="font-serif font-bold text-lg text-coffee-900">Mission</p>
             </div>
-            <p className="text-sm text-coffee-600 leading-relaxed">
-              Da Bali Resort is committed to providing guests with a refreshing and memorable retreat through excellent service, nature-centered experiences, and a serene Balinese-inspired environment that nurtures comfort, leisure, and connection with nature.
-            </p>
+            <p className="text-sm text-coffee-600 leading-relaxed whitespace-pre-line">{siteContent.mission}</p>
           </div>
         </div>
       </section>
@@ -6914,12 +6963,12 @@ export default function App() {
     const sidebarItems = [
       { id: 'overview', label: 'Overview', icon: <BarChart3 className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
       { id: 'analytics', label: 'Analytics', icon: <PieChart className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
-      { id: 'reservations', label: 'All Reservation', icon: <Calendar className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
+      { id: 'reservations', label: 'All Reservations', icon: <Calendar className="h-4 w-4 stroke-[1.5]" />, roles: ['staff'] },
       { id: 'payments', label: 'Payments', icon: <CreditCard className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
       { id: 'pos', label: 'Front Desk POS', icon: <Receipt className="h-4 w-4 stroke-[1.5]" />, roles: ['admin', 'staff'] },
       { id: 'rooms', label: 'Room Management', icon: <Bed className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
       { id: 'amenities', label: 'Amenity Management', icon: <Flower className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
-      { id: 'slideshow', label: 'Slideshow Management', icon: <LayoutDashboard className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
+      { id: 'slideshow', label: 'Slideshow & About Us', icon: <LayoutDashboard className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
       { id: 'staff-records', label: 'Staff Records', icon: <Users className="h-4 w-4 stroke-[1.5]" />, roles: ['admin', 'staff'] },
       { id: 'housekeeping', label: 'Housekeeping', icon: <Sparkles className="h-4 w-4 stroke-[1.5]" />, roles: ['admin', 'staff', 'housekeeping'] },
       { id: 'feedback', label: 'Guest Feedback', icon: <Star className="h-4 w-4 stroke-[1.5]" />, roles: ['admin'] },
@@ -7264,7 +7313,9 @@ export default function App() {
                     <div className="lg:col-span-8 bg-white rounded-2xl lg:rounded-[2.5rem] shadow-xl border border-[#A3402A] overflow-hidden flex flex-col">
                       <div className="p-6 lg:p-10 border-b border-coffee-50 flex justify-between items-center bg-coffee-50/30">
                         <h3 className="text-xl lg:text-2xl font-serif font-bold text-coffee-900">Recent Activity</h3>
-                        <button onClick={() => setAdminActiveTab('reservations')} className="text-[#A3402A] text-xs lg:text-sm font-bold hover:underline">View All</button>
+                        {user?.role === 'staff' && (
+                          <button onClick={() => setAdminActiveTab('reservations')} className="text-[#A3402A] text-xs lg:text-sm font-bold hover:underline">View All</button>
+                        )}
                       </div>
                       <div className="flex-grow overflow-x-auto">
                         <table className="w-full text-left min-w-[600px]">
@@ -7454,6 +7505,57 @@ export default function App() {
                       </div>
                     </div>
                   </div>
+
+                  <form onSubmit={handleSaveSiteContent} className="bg-white rounded-2xl lg:rounded-[2.5rem] border border-[#A3402A] overflow-hidden shadow-xl flex flex-col">
+                    <div className="bg-[#5C3321] p-4 lg:p-6 text-white">
+                      <h3 className="text-xl lg:text-2xl font-serif font-bold">About Us, Mission &amp; Vision</h3>
+                      <p className="text-xs text-white/60 mt-1">Edit the text shown in the About Us section of the homepage. Leave a field blank to restore the default text.</p>
+                    </div>
+                    <div className="p-4 lg:p-8 space-y-6">
+                      <div>
+                          <label className="block text-xs font-bold uppercase tracking-widest text-coffee-600 mb-2">About Us</label>
+                          <textarea
+                            value={siteContentForm.about_us}
+                            onChange={(e) => setSiteContentForm({ ...siteContentForm, about_us: e.target.value })}
+                            rows={10}
+                            maxLength={10000}
+                            className="w-full rounded-2xl border border-coffee-200 px-4 py-3 text-sm text-coffee-900 focus:outline-none focus:ring-2 focus:ring-[#A3402A]/30"
+                          />
+                        <p className="text-[11px] text-coffee-400 mt-1">Separate paragraphs with a blank line. Only the first paragraph shows until a guest taps "Read our story".</p>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                          <label className="block text-xs font-bold uppercase tracking-widest text-coffee-600 mb-2">Vision</label>
+                          <textarea
+                            value={siteContentForm.vision}
+                            onChange={(e) => setSiteContentForm({ ...siteContentForm, vision: e.target.value })}
+                            rows={6}
+                            maxLength={10000}
+                            className="w-full rounded-2xl border border-coffee-200 px-4 py-3 text-sm text-coffee-900 focus:outline-none focus:ring-2 focus:ring-[#A3402A]/30"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold uppercase tracking-widest text-coffee-600 mb-2">Mission</label>
+                          <textarea
+                            value={siteContentForm.mission}
+                            onChange={(e) => setSiteContentForm({ ...siteContentForm, mission: e.target.value })}
+                            rows={6}
+                            maxLength={10000}
+                            className="w-full rounded-2xl border border-coffee-200 px-4 py-3 text-sm text-coffee-900 focus:outline-none focus:ring-2 focus:ring-[#A3402A]/30"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex justify-end">
+                        <button
+                          type="submit"
+                          disabled={isSavingSiteContent}
+                          className="bg-[#5C3321] text-white px-8 py-3 rounded-xl text-sm font-bold hover:bg-[#A3402A] transition-all shadow-md disabled:opacity-50"
+                        >
+                          {isSavingSiteContent ? 'Saving...' : 'Save Changes'}
+                        </button>
+                      </div>
+                    </div>
+                  </form>
                 </motion.div>
               )}
 
