@@ -237,6 +237,35 @@ const notifyGuest = (contact: { email?: string | null, phone?: string | null }, 
 };
 
 const peso = (n: number | null | undefined) => `PHP ${Number(n || 0).toLocaleString('en-PH', { maximumFractionDigits: 2 })}`;
+// --- Single-part SMS helpers ---
+// One SMS holds 160 plain (GSM-7) characters. A single character outside that set (₱, emoji,
+// curly quotes, ñ, ...) switches the whole text to Unicode, which drops the limit to 70 and
+// splits the message. So every value put into a text is reduced to plain characters first.
+const SMS_LIMIT = 160;
+const smsSafe = (value: unknown) =>
+  String(value ?? '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '') // é -> e, ñ -> n
+    .replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[–—]/g, '-')
+    .replace(/[^A-Za-z0-9 .,:;!?'"()&%+\-\/#@*=<>_$]/g, '')
+    .replace(/\s+/g, ' ').trim();
+const smsClip = (value: unknown, max: number) => {
+  const s = smsSafe(value);
+  return s.length <= max ? s : s.slice(0, max - 1).trimEnd() + '.';
+};
+// Builds the text with the longest variable part (a room/amenity name) shortened until the
+// whole message fits in one SMS.
+const fitSms = (build: (item: string) => string, item: string) => {
+  let text = build(item);
+  for (let len = item.length - 1; text.length > SMS_LIMIT && len >= 6; len--) text = build(smsClip(item, len));
+  return text.length <= SMS_LIMIT ? text : text.slice(0, SMS_LIMIT);
+};
+const smsDate = (value: string | null | undefined) => {
+  if (!value) return 'TBA';
+  const d = new Date(String(value).slice(0, 10) + 'T00:00:00');
+  return isNaN(d.getTime()) ? smsSafe(value) : format(d, 'MMM d');
+};
+const smsPeso = (n: number | null | undefined) => `PHP ${Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+
 const formatDateLabel = (value: string | null | undefined) => {
   if (!value) return 'N/A';
   const d = new Date(String(value).slice(0, 10) + 'T00:00:00');
@@ -1319,7 +1348,15 @@ async function startServer() {
         'For questions, call us at 09629724075.',
         'Da Bali Resort',
       ];
-      const sms = `Da Bali Resort: Hi ${name}! ${noticeIntro(kind, room)} Code: ${b.qr_code || `#${b.id}`}, ${formatDateLabel(b.check_in)} to ${formatDateLabel(b.check_out)}, ${b.guests_count || 1} guest(s), Total ${peso(b.total_price)}, Balance ${peso(balance)}. Status: ${NOTICE_STATUS[kind]}.`;
+      const smsName = smsClip(name, 15) || 'Guest';
+      const smsCode = smsSafe(b.qr_code || `#${b.id}`);
+      const sms = fitSms(item =>
+        kind === 'confirmed'
+          ? `Da Bali Resort: Hi ${smsName}, your booking ${smsCode} for ${item}, ${smsDate(b.check_in)} to ${smsDate(b.check_out)}, is confirmed. Balance: ${smsPeso(balance)}. Thank you!`
+        : kind === 'checked-in'
+          ? `Da Bali Resort: Hi ${smsName}, you are now checked in to ${item} (${smsCode}). Check-out is ${smsDate(b.check_out)}, 12 PM. Enjoy your stay!`
+          : `Da Bali Resort: Hi ${smsName}, you are now checked out of ${item} (${smsCode}). Thank you for staying with us. See you again!`,
+        smsSafe(room) || 'your room');
       notifyGuest({ email: b.guest_email, phone: b.guest_phone }, `Da Bali Resort - ${NOTICE_SUBJECT[kind]} (${b.qr_code || `#${b.id}`})`, lines.join('\n'), sms);
     } catch (e) {
       console.error("Failed to send room booking notice:", e);
@@ -1361,7 +1398,15 @@ async function startServer() {
         'For questions, call us at 09629724075.',
         'Da Bali Resort',
       ];
-      const sms = `Da Bali Resort: Hi ${name}! ${noticeIntro(kind, amenity)} Ref: ${ref}, ${formatDateLabel(b.reservation_date)} ${b.reservation_time || ''}, ${b.pax_count || 1} pax, Total ${peso(b.total_price)}, Balance ${peso(balance)}. Status: ${NOTICE_STATUS[kind]}.`;
+      const smsName = smsClip(name, 15) || 'Guest';
+      const smsWhen = [smsDate(b.reservation_date), smsClip(b.reservation_time, 20)].filter(Boolean).join(' ');
+      const sms = fitSms(item =>
+        kind === 'confirmed'
+          ? `Da Bali Resort: Hi ${smsName}, your ${item} booking ${ref} on ${smsWhen}, ${b.pax_count || 1} pax, is confirmed. Balance: ${smsPeso(balance)}. Thank you!`
+        : kind === 'checked-in'
+          ? `Da Bali Resort: Hi ${smsName}, you are now checked in for ${item} (${ref}). Enjoy your time with us!`
+          : `Da Bali Resort: Hi ${smsName}, you are now checked out of ${item} (${ref}). Thank you and see you again!`,
+        smsSafe(amenity) || 'your amenity');
       notifyGuest({ email: b.email, phone: b.contact_no }, `Da Bali Resort - ${NOTICE_SUBJECT[kind]} (${amenity})`, lines.join('\n'), sms);
     } catch (e) {
       console.error("Failed to send amenity booking notice:", e);
@@ -1438,7 +1483,7 @@ async function startServer() {
       ).catch(() => {});
       // Worded to pass the SMS gateway's spam filter: the earlier text (with "successfully registered",
       // "confirmation email", "verify" and the email address) was rejected as spam.
-      sendSms(mobile, `Da Bali Resort: Hi ${firstName}, welcome! Your sign-up is complete. Please check your email inbox to finish setting up. Thank you!`).catch(() => {});
+      sendSms(mobile, `Da Bali Resort: Hi ${smsClip(firstName, 15) || 'Guest'}, welcome! Your sign-up is complete. Please check your email inbox to finish setting up. Thank you!`).catch(() => {});
 
       res.json({
         ...user,
